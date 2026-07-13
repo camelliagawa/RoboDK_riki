@@ -1,0 +1,9 @@
+# 力/モーメント リアルタイム可視化の依存パッケージ
+#
+# pyserial : DynPick 力覚センサのシリアル通信（dynpick_sensor.py）
+pyserial>=3.5
+
+# robolink / robodk : RoboDK Python API。
+#   通常は RoboDK 本体に同梱の Python から利用できるため pip 不要。
+#   別環境で使う場合のみ `pip install robodk` を実行する。
+# robodk>=5.5

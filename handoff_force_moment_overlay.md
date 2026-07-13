@@ -33,6 +33,12 @@ FANUC ロボット（Run on Robot 接続）を動かしたときに、**DynPick 
   2. **矢印描画** … 毎ループ TCP を基点に、力ベクトル（赤）とモーメントベクトル（青）を折れ線カーブで描画。
   3. **平滑化** … EMA ローパス + デッドバンドでノイズ／ガタつきを抑制。
   4. **デモモード** … `USE_DEMO_SIGNAL=True` でセンサ未接続でもダミー波形で描画テスト可能。
+  5. **DynPick 実センサ読み取り**（新規） … `dynpick_sensor.py` を実装。シリアルで `R` 要求 → 生値(LSB) 受信 →
+     `(生値 − 零点) / 主軸感度` で N / N·m へ換算。`read_wrench()` から呼び出し済み。
+     感度・零点の初期値は riki（力覚センサ CSV グラフビューア）の出荷特性データ（ZEF-6A100-4-RAD）に準拠。
+     開始時に無負荷で零点を自動実測する `tare()` 付き。
+     ※ この読み取り部分は riki リポジトリの CSV 換算仕様（列順・換算式・感度）を参考に新規実装したもの。
+       riki 自体は「記録済み CSV を後から見るビューア」で、ライブ読み取りは含まれていなかった。
 - 描画方式：`AddCurve(points, None, False, PROJECTION_NONE)`
   （reference=None → ステーション絶対座標、投影なし＝空中に描画）。
   1 矢印 = 1 折れ線カーブ。ちらつき低減のため「新規追加 → 旧削除」の順で更新。
@@ -70,7 +76,9 @@ FANUC ロボット（Run on Robot 接続）を動かしたときに、**DynPick 
 
 優先度順：
 
-- [ ] **実センサ接続** … `read_wrench()` を既存の DynPick 読み取り呼び出しに差し替え、`USE_DEMO_SIGNAL=False`。
+- [x] **実センサ接続** … `dynpick_sensor.py`（DynPickSensor）を実装し `read_wrench()` に接続済み。既定 `USE_DEMO_SIGNAL=False`。
+- [ ] **接続確認** … `DYNPICK_PORT`（Windows 例 `COM3` / Linux 例 `/dev/ttyUSB0`）と `DYNPICK_BAUD`（既定 921600、機種により 230400 等）を実機に合わせる。
+      応答が来ない場合はポート/ボーレート、`parse_dynpick_line()` の想定形式を確認。
 - [ ] **軸校正** … 既知方向に押して、`AXIS_MAP_FORCE` / `AXIS_MAP_MOMENT` の index・符号を実測で合わせる。
 - [ ] **スケール調整** … `FORCE_SCALE` / `MOMENT_SCALE` を実研削レンジに合わせる。振り切れは `MAX_ARROW_LEN` で調整。
 - [ ] **Busy 検知の確認** … 出足が鈍ければ、関節角変化量による動作検知フォールバックを追加。
@@ -102,7 +110,10 @@ FANUC ロボット（Run on Robot 接続）を動かしたときに、**DynPick 
 
 ## 8. 関連ファイル
 
-- `force_moment_overlay.py` … 本体たたき台（力/モーメント可視化 + 自動スタート）。
+- `force_moment_overlay.py` … 本体（力/モーメント可視化 + 自動スタート + DynPick 接続）。
+- `dynpick_sensor.py` … DynPick / ZEF 系 6軸センサのシリアル読み取り・LSB→N/Nm 換算モジュール。
+  `python3 dynpick_sensor.py` でパース／換算のセルフテスト実行可（ハードウェア不要）。
+- `requirements.txt` … 依存パッケージ（`pyserial`。`robolink`/`robodk` は RoboDK 同梱の Python から利用）。
 
 ---
 
