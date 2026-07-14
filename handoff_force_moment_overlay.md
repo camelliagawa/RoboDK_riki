@@ -113,6 +113,9 @@ FANUC ロボット（Run on Robot 接続）を動かしたときに、**DynPick 
 - `force_moment_overlay.py` … 本体（力/モーメント可視化 + 自動スタート + DynPick 接続）。
 - `dynpick_sensor.py` … DynPick / ZEF 系 6軸センサのシリアル読み取り・LSB→N/Nm 換算モジュール。
   `python3 dynpick_sensor.py` でパース／換算のセルフテスト実行可（ハードウェア不要）。
+- `dynpick_check.py` … 接続・校正 確認ツール（RoboDK 不要）。ポート列挙・ボーレート自動判定・
+  数値ライブ表示・最大値記録。`--list` / `--scan-baud` / ライブ表示。
+- `calibration_guide.md` … 手順書（ポート/ボーレート・軸校正・スケール・本番の動かし方）。
 - `requirements.txt` … 依存パッケージ（`pyserial`。`robolink`/`robodk` は RoboDK 同梱の Python から利用）。
 
 ---
