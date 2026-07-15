@@ -9,7 +9,7 @@
 
 - **このロボットは RoboDK から実機をリアルタイム駆動できない**（FANUC の Stream Motion オプション R784 未導入を実機確認）。
 - そのため本番は **ロボット＝ティーチペンダントで KENMA 実行 / 力＝PCで `--no-robodk` 記録** の分担運用に確定。
-- **記録(`record_force.bat`)→グラフ化(`plot_force_log.py`)** まで実装・両PCで動作確認済み。残りは実研磨データの取得と微調整のみ。
+- **記録(`record_force.bat`)→グラフ化(`plot_force_log.py`)** まで実装・両PCで動作確認済み。**グラフは記録用・分析用どちらのPCからでも見られる**（両PCに matplotlib が入っていればよい）。残りは実研磨データの取得と微調整のみ。
 
 ---
 
@@ -34,9 +34,11 @@ FANUC ロボットで包丁の研磨（TORMEK T-8）を行う際に、**DynPick 
 | 座標系基準 | Kenma point / riki_Assem2 |
 
 ### PC 2台構成
-- **記録用PC（例: `metal2022`）** … DynPick センサを接続。conda base（`(base)`）に `pyserial`(+`robodk`) あり。ここで力を記録。
+- 役割の違いは「**センサが繋がっているか**」だけ。**グラフ化(`plot_force_log.py`)は両PCで動く**（matplotlib さえ入っていればどちらでも見られる）。
+- **記録用PC（例: `metal2022`）** … DynPick センサを接続。conda base（`(base)`）に `pyserial`(+`robodk`) あり。ここで力を記録。**グラフも見たいので `matplotlib` を入れておく**（`pip install matplotlib` / conda なら `conda install matplotlib`）。
 - **分析用PC（例: `koder`）** … Python 3.12 + `matplotlib`。CSV を受け取ってグラフ化。センサ不要。
 - 両PCともリポジトリをクローンし本ブランチをチェックアウト済み。
+- `plot_force_log.py` はスクリプトのあるフォルダ（無ければカレント）の最新 `force_log_*.csv` を自動選択するので、CSV をそのフォルダに置けばどちらのPCでも同じ操作で開ける。
 
 ---
 
@@ -98,10 +100,13 @@ FANUC ロボットで包丁の研磨（TORMEK T-8）を行う際に、**DynPick 
      研磨作業速度 50 mm/s とは別（移動を落としたい場合はここを 100 等に）。
 5. 動作中は力がCSVに記録される。終了は記録ウィンドウで **Ctrl+C** → `force_log_日時.csv` 保存（保存先が表示される）。
 
-### B. グラフ化（分析用PC）
-1. 記録した `force_log_*.csv` を分析用PCの `RoboDK_riki` フォルダにコピー（USB / 共有フォルダ / OneDrive 等）。
-2. デスクトップの **`plot_force`** をダブルクリック（または `python plot_force_log.py`）。
-3. 最新CSVを自動選択し、グラフ表示＋同名PNG保存。ファイル指定は `python plot_force_log.py 〇〇.csv --contact 3.0`。
+### B. グラフ化（どちらのPCでも可）
+- **記録用PCでそのまま見る場合** … 記録に使ったフォルダには CSV があるので、デスクトップの **`plot_force`** をダブルクリックするだけ。
+- **分析用PCで見る場合** … 記録した `force_log_*.csv` を分析用PCの `RoboDK_riki` フォルダにコピー（USB / 共有フォルダ / OneDrive 等）してから同じ操作。
+- 共通操作:
+  1. デスクトップの **`plot_force`** をダブルクリック（または `python plot_force_log.py`）。
+  2. 最新CSVを自動選択し、グラフ表示＋同名PNG保存。ファイル指定は `python plot_force_log.py 〇〇.csv --contact 3.0`。
+- どちらのPCでも見られるようにするため、**両PCに matplotlib を入れておく**（記録用PCが未導入なら `pip install matplotlib`）。
 
 ### 起動オプション（ファイルを編集せず切替）
 `--demo` / `--port` / `--baud` / `--robot` / `--always-on` / `--detect busy|joints|both` / `--log` / `--log-path` / `--no-robodk`
@@ -137,7 +142,7 @@ FANUC ロボットで包丁の研磨（TORMEK T-8）を行う際に、**DynPick 
 
 - **RoboDK からの実機駆動は不可**（Stream Motion 未導入）。RoboDK 接続を前提にした自動記録（Busy/関節角検知）は
   本機では効かないため、本番は必ず `--no-robodk`（常時記録）を使う。
-- `force_log_*.csv` は Git 管理外（`.gitignore`）。PC間はファイルコピーで受け渡す。
+- `force_log_*.csv` は Git 管理外（`.gitignore`）。PC間はファイルコピーで受け渡す。**グラフは両PCで見られる**（matplotlib が両方に必要）。記録用PCで直接見るならコピー不要。
 - 軸マッピング・感度はセンサ取付向き/個体依存。**取付を変えたら必ず再校正**。
 - `--no-robodk` の CSV は TCP 位置が空欄（実機位置は取れない）。力と位置を対応付けたい場合は時刻でプログラム工程と突き合わせる。
 - 記録は毎行 flush なので Ctrl+C で止めても残る。長時間で間引くなら `LOG_EVERY` を上げる。
