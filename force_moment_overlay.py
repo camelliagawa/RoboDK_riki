@@ -26,17 +26,33 @@ from datetime import datetime
 # このファイルのあるフォルダを常に import パスへ追加する。
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-try:
-    # RoboDK 同梱 Python（scripts フォルダが path に入っている場合）
-    from robolink import Robolink, ITEM_TYPE_ROBOT, PROJECTION_NONE
-except ImportError:
-    # 外部 Python（pip install robodk）の場合
-    from robodk.robolink import Robolink, ITEM_TYPE_ROBOT, PROJECTION_NONE
+# robolink は RoboDK 連携時のみ必要。--no-robodk（記録のみ）では読み込まないので、
+# robodk 未インストールのPCでもロガーは動く。実際の import は _import_robolink() で遅延実行。
+Robolink = None
+ITEM_TYPE_ROBOT = None
+PROJECTION_NONE = None
+
+
+def _import_robolink():
+    """RoboDK 連携に必要な robolink シンボルを遅延 import してモジュール全体で使えるようにする。"""
+    global Robolink, ITEM_TYPE_ROBOT, PROJECTION_NONE
+    if Robolink is not None:
+        return
+    try:
+        # RoboDK 同梱 Python（scripts フォルダが path に入っている場合）
+        from robolink import Robolink as _R, ITEM_TYPE_ROBOT as _IT, PROJECTION_NONE as _PN
+    except ImportError:
+        # 外部 Python（pip install robodk）の場合
+        from robodk.robolink import Robolink as _R, ITEM_TYPE_ROBOT as _IT, PROJECTION_NONE as _PN
+    Robolink, ITEM_TYPE_ROBOT, PROJECTION_NONE = _R, _IT, _PN
+
+
 from dynpick_sensor import DynPickSensor
 
 # =================== 調整パラメータ ===================
 ROBOT_NAME = ''          # '' で最初のロボット。名前指定も可 例: 'Fanuc LR Mate 200iD/7L'
 USE_DEMO_SIGNAL = False  # True: ダミー正弦波でRoboDK描画テスト / False: read_wrench()の実センサ値
+USE_ROBODK      = True    # True: RoboDK連携（矢印表示）/ False: センサ読み取り＋CSV記録のみ（--no-robodk）
 
 # --- DynPick 実センサ接続（USE_DEMO_SIGNAL=False のとき使用）---
 DYNPICK_PORT = 'COM3'    # 接続ポート。Windows: 'COM3' 等 / Linux: '/dev/ttyUSB0'
@@ -198,14 +214,20 @@ class ForceLogger:
         fx, fy, fz, mx, my, mz = wrench
         fmag = math.sqrt(fx * fx + fy * fy + fz * fz)
         mmag = math.sqrt(mx * mx + my * my + mz * mz)
-        px, py, pz = tcp_pos[0], tcp_pos[1], tcp_pos[2]
+        # tcp_pos=None（RoboDK未使用時）は位置列を空欄にする
+        if tcp_pos is None:
+            px = py = pz = ''
+        else:
+            px = '%.2f' % tcp_pos[0]
+            py = '%.2f' % tcp_pos[1]
+            pz = '%.2f' % tcp_pos[2]
         self._w.writerow([
             datetime.now().isoformat(timespec='milliseconds'),
             '%.3f' % t_s,
             '%.4f' % fx, '%.4f' % fy, '%.4f' % fz,
             '%.5f' % mx, '%.5f' % my, '%.5f' % mz,
             '%.4f' % fmag, '%.5f' % mmag,
-            '%.2f' % px, '%.2f' % py, '%.2f' % pz,
+            px, py, pz,
             1 if moving else 0,
         ])
         self._f.flush()   # 途中で強制終了(Ctrl+C)しても記録が残るよう毎回フラッシュ
@@ -263,9 +285,59 @@ def _joints_list(robot):
         return [float(j[i, 0]) for i in range(n)]
 
 
+def main_headless():
+    """RoboDK を使わず、DynPick センサの値を CSV に記録するだけのモード。
+
+    ロボットはティーチペンダント等で動かし、力データだけを時刻付きで残したいとき用
+    （Stream Motion 等のドライバが無く RoboDK から実機を駆動できない構成向け）。
+    接続・矢印描画は行わず、常時記録する。位置列は空欄になる。
+    """
+    global _SENSOR
+
+    if not USE_DEMO_SIGNAL:
+        _SENSOR = DynPickSensor(port=DYNPICK_PORT, baudrate=DYNPICK_BAUD)
+        _SENSOR.open()
+        if TARE_ON_START:
+            print('DynPick 零点測定中… ツールに触れないでください')
+            _SENSOR.tare(TARE_SAMPLES)
+            print('零点測定 完了')
+
+    log_path = LOG_PATH or _make_log_path()
+    logger = ForceLogger(log_path)
+    print('CSV記録先:', log_path)
+    print('記録開始（ロボットを動かしてください。終了は Ctrl+C）')
+
+    dt = 1.0 / UPDATE_RATE
+    t_start = time.time()
+    log_count = 0
+    try:
+        while True:
+            t0 = time.time()
+            fx, fy, fz, mx, my, mz = read_wrench(t0)
+            if log_count % LOG_EVERY == 0:
+                logger.write(t0 - t_start, (fx, fy, fz, mx, my, mz), None, True)
+            log_count += 1
+            # 端末に簡易ライブ表示（1行を上書き更新）
+            fmag = math.sqrt(fx * fx + fy * fy + fz * fz)
+            print('\r t=%6.1fs  F=(%6.2f,%6.2f,%6.2f)N |F|=%5.2f  '
+                  'M=(%6.3f,%6.3f,%6.3f)Nm   ' %
+                  (t0 - t_start, fx, fy, fz, fmag, mx, my, mz), end='')
+            elapsed = time.time() - t0
+            if elapsed < dt:
+                time.sleep(dt - elapsed)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        logger.close()
+        print('\nCSV記録を保存しました（%d 行）: %s' % (logger.rows, logger.path))
+        if _SENSOR is not None:
+            _SENSOR.close()
+
+
 def main():
     global _SENSOR
 
+    _import_robolink()   # RoboDK 連携モードのみ robolink を読み込む
     RDK, robot = _connect_robot()
 
     # 実センサ使用時はここで接続。無負荷状態で零点を実測してから開始する。
@@ -423,6 +495,8 @@ if __name__ == '__main__':
                     help='動作中の力/モーメントをCSVに記録する')
     ap.add_argument('--log-path',
                     help='CSVの保存先パス（既定: force_log_日時.csv をスクリプトと同じフォルダに生成）')
+    ap.add_argument('--no-robodk', action='store_true',
+                    help='RoboDKを使わずセンサ読み取り＋CSV記録のみ（ペンダントでロボットを動かす構成向け。常時記録）')
     args = ap.parse_args()
 
     # コマンドライン引数で冒頭パラメータを上書き（ファイルを編集せずに切替できる）
@@ -443,5 +517,11 @@ if __name__ == '__main__':
     if args.log_path:
         LOG_CSV = True
         LOG_PATH = args.log_path
+    if args.no_robodk:
+        USE_ROBODK = False
 
-    main()
+    if USE_ROBODK:
+        main()
+    else:
+        # RoboDK 未使用モードは常に記録する（記録が目的のため）
+        main_headless()

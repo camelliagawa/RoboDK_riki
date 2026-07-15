@@ -113,7 +113,18 @@ FANUC ロボット（Run on Robot 接続）を動かしたときに、**DynPick 
    起動時 `零点測定中…` の間はツールに触れない。**本番ツール(包丁)装着後に一度 tare し直すと零点が正確**。
 
 ### 起動オプション（ファイルを編集せず切替）
-`--demo` / `--port` / `--baud` / `--robot` / `--always-on` / `--detect busy|joints|both` / `--log` / `--log-path`
+`--demo` / `--port` / `--baud` / `--robot` / `--always-on` / `--detect busy|joints|both` / `--log` / `--log-path` / `--no-robodk`
+
+### 実機の運用モード（本機は Stream Motion 未導入）
+本ロボット（岐阜県工技センター）の R-30iB は **Stream Motion オプション(R784) が未導入**のため、
+RoboDK の FanucSM ドライバでの**実機リアルタイム駆動はできない**（状態→ソフト版数の333オプションに R784 無しを確認）。
+そのため本番は次の分担で運用する：
+- **ロボットを動かす** … ティーチペンダントで KENMA プログラムを実行（従来どおり。RoboDK は駆動しない）
+- **力を測定・記録** … PC で `python force_moment_overlay.py --no-robodk --log`
+  - `--no-robodk` は RoboDK 連携（矢印描画）を行わず、**センサ読み取り＋CSV記録のみ**を常時実行するモード。
+    robolink を遅延 import にしてあるので **robodk 未インストールのPCでも動く**。
+    端末に力/モーメントのライブ値を表示しつつ、`force_log_日時.csv` に記録（位置列は空欄）。
+  - ペンダントで KENMA を動かす直前に起動し、動かし終えたら Ctrl+C で保存。
 
 ### CSV記録（動作中の力/モーメントを保存）
 - `python force_moment_overlay.py --log` … 実センサ + 動作中のみ表示に加え、**動作中の計測をCSVに記録**。
