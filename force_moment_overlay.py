@@ -58,6 +58,10 @@ ACTIVE_ONLY_WHEN_MOVING = True   # True: ロボット動作中のみ表示（自
 # 例: tool X <- sensor[0], tool Y <- sensor[1], tool Z <- sensor[2]
 AXIS_MAP_FORCE  = [(0, +1), (1, +1), (2, +1)]
 AXIS_MAP_MOMENT = [(0, +1), (1, +1), (2, +1)]
+
+# 矢印の基点オフセット [mm]（TCP座標系）。TCPとセンサ計測原点/刃先がずれている場合に
+# 根元位置を調整する。例: 刃先方向(+Z)に50mm出すなら [0,0,50]。既定は TCP そのもの。
+BASE_OFFSET_TOOL = [0.0, 0.0, 0.0]
 # =====================================================
 
 
@@ -209,9 +213,14 @@ def main():
                     f_ema = _ema(f_ema, f_tool, EMA_ALPHA)
                     m_ema = _ema(m_ema, m_tool, EMA_ALPHA)
 
-                    # TCP の絶対姿勢（ステーション基準）を基点にする
-                    tcp = robot.PoseAbs() * robot.Pose()
-                    p0 = tcp.Pos()
+                    # TCP の絶対姿勢（ステーション基準）を基点にする。
+                    # robot.Pose() は「アクティブな参照フレーム基準」のため、別フレームが
+                    # 有効だと矢印が空中に飛ぶ。参照フレームに依存しない FK から絶対姿勢を求める。
+                    tcp = robot.PoseAbs() * robot.SolveFK(robot.Joints(), robot.PoseTool())
+                    # 基点（必要なら BASE_OFFSET_TOOL でセンサ原点/刃先へずらす）
+                    off_world = _rot_vec(tcp, BASE_OFFSET_TOOL)
+                    tcp_pos = tcp.Pos()
+                    p0 = [tcp_pos[i] + off_world[i] for i in range(3)]
                     f_world = _rot_vec(tcp, f_ema)   # ツール座標 -> ワールド方向
                     m_world = _rot_vec(tcp, m_ema)
 
