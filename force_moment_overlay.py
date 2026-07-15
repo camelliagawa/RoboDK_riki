@@ -18,7 +18,9 @@ import os
 import sys
 import time
 import math
+import csv
 import struct
+from datetime import datetime
 
 # RoboDK のボタンから起動しても隣の dynpick_sensor.py を読めるよう、
 # このファイルのあるフォルダを常に import パスへ追加する。
@@ -63,6 +65,11 @@ AXIS_MAP_MOMENT = [(1, -1), (2, -1), (0, +1)]   # 取付回転は力と同じ
 # 矢印の基点オフセット [mm]（TCP座標系）。TCPとセンサ計測原点/刃先がずれている場合に
 # 根元位置を調整する。例: 刃先方向(+Z)に50mm出すなら [0,0,50]。既定は TCP そのもの。
 BASE_OFFSET_TOOL = [0.0, 0.0, 0.0]
+
+# --- CSV ログ記録（動作中の力/モーメントを記録） ---
+LOG_CSV   = False   # True: 力/モーメントをCSVに記録（--log でも有効化）
+LOG_PATH  = ''      # 保存先パス。'' なら force_log_日時.csv をスクリプトと同じフォルダに自動生成
+LOG_EVERY = 1       # 何サンプルごとに1行記録するか（1=毎サンプル。長時間運用で間引くなら 2,5.. ）
 # =====================================================
 
 
@@ -147,6 +154,62 @@ class WrenchArrow:
         self.item = None
 
 
+# ---------- CSV ログ記録 ----------
+def _make_log_path():
+    """既定のログ保存パス（スクリプトと同じフォルダに force_log_日時.csv）を返す。"""
+    folder = os.path.dirname(os.path.abspath(__file__))
+    fname = 'force_log_' + datetime.now().strftime('%Y%m%d_%H%M%S') + '.csv'
+    return os.path.join(folder, fname)
+
+
+class ForceLogger:
+    """力/モーメントの計測値を CSV に追記記録する。
+
+    記録するのは read_wrench() が返す生の物理量（N, N*m）。表示用の EMA/軸割当
+    ではなく、後解析しやすい素の値を残す。TCP位置も併記して力と位置を対応付ける。
+    """
+
+    HEADER = [
+        'time_iso', 't_s',
+        'fx_N', 'fy_N', 'fz_N',
+        'mx_Nm', 'my_Nm', 'mz_Nm',
+        'Fmag_N', 'Mmag_Nm',
+        'tcp_x_mm', 'tcp_y_mm', 'tcp_z_mm',
+        'moving',
+    ]
+
+    def __init__(self, path):
+        self.path = path
+        self._f = open(path, 'w', newline='', encoding='utf-8')
+        self._w = csv.writer(self._f)
+        self._w.writerow(self.HEADER)
+        self._f.flush()
+        self.rows = 0
+
+    def write(self, t_s, wrench, tcp_pos, moving):
+        fx, fy, fz, mx, my, mz = wrench
+        fmag = math.sqrt(fx * fx + fy * fy + fz * fz)
+        mmag = math.sqrt(mx * mx + my * my + mz * mz)
+        px, py, pz = tcp_pos[0], tcp_pos[1], tcp_pos[2]
+        self._w.writerow([
+            datetime.now().isoformat(timespec='milliseconds'),
+            '%.3f' % t_s,
+            '%.4f' % fx, '%.4f' % fy, '%.4f' % fz,
+            '%.5f' % mx, '%.5f' % my, '%.5f' % mz,
+            '%.4f' % fmag, '%.5f' % mmag,
+            '%.2f' % px, '%.2f' % py, '%.2f' % pz,
+            1 if moving else 0,
+        ])
+        self._f.flush()   # 途中で強制終了(Ctrl+C)しても記録が残るよう毎回フラッシュ
+        self.rows += 1
+
+    def close(self):
+        try:
+            self._f.close()
+        except Exception:
+            pass
+
+
 # ---------- センサ読み取り ----------
 _SENSOR = None   # DynPickSensor インスタンス（実センサ使用時に main() で生成）
 
@@ -190,9 +253,19 @@ def main():
     f_arrow = WrenchArrow(RDK, FORCE_COLOR, 'Force_vector')
     m_arrow = WrenchArrow(RDK, MOMENT_COLOR, 'Moment_vector')
 
+    # CSV ログ（動作中の力/モーメントを記録）。有効時のみファイルを開く。
+    logger = None
+    if LOG_CSV:
+        log_path = LOG_PATH or _make_log_path()
+        logger = ForceLogger(log_path)
+        RDK.ShowMessage('CSV記録中: ' + log_path, False)
+        print('CSV記録先:', log_path)
+    log_count = 0
+
     f_ema = [0.0, 0.0, 0.0]
     m_ema = [0.0, 0.0, 0.0]
     dt = 1.0 / UPDATE_RATE
+    t_start = time.time()
 
     # RoboDK API 通信断のとき再接続に使う例外群
     comm_errors = (ConnectionError, OSError, struct.error)
@@ -224,6 +297,14 @@ def main():
                     p0 = [tcp_pos[i] + off_world[i] for i in range(3)]
                     f_world = _rot_vec(tcp, f_ema)   # ツール座標 -> ワールド方向
                     m_world = _rot_vec(tcp, m_ema)
+
+                    # CSV記録（動作中のみ。LOG_EVERY で間引き可）
+                    if logger is not None:
+                        if log_count % LOG_EVERY == 0:
+                            logger.write(t0 - t_start,
+                                         (fx, fy, fz, mx, my, mz),
+                                         tcp_pos, True)
+                        log_count += 1
 
                     fmag = _norm(f_ema)
                     if fmag >= FORCE_DEADBAND:
@@ -271,6 +352,9 @@ def main():
             RDK.ShowMessage('力/モーメント表示を終了しました', False)
         except comm_errors:
             pass
+        if logger is not None:
+            logger.close()
+            print('CSV記録を保存しました（%d 行）: %s' % (logger.rows, logger.path))
         if _SENSOR is not None:
             _SENSOR.close()
 
@@ -287,6 +371,10 @@ if __name__ == '__main__':
     ap.add_argument('--robot', help='ロボット名（既定: 先頭のロボット）')
     ap.add_argument('--always-on', action='store_true',
                     help='ロボット停止中でも常時表示（手押しでの軸校正に便利）')
+    ap.add_argument('--log', action='store_true',
+                    help='動作中の力/モーメントをCSVに記録する')
+    ap.add_argument('--log-path',
+                    help='CSVの保存先パス（既定: force_log_日時.csv をスクリプトと同じフォルダに生成）')
     args = ap.parse_args()
 
     # コマンドライン引数で冒頭パラメータを上書き（ファイルを編集せずに切替できる）
@@ -300,5 +388,10 @@ if __name__ == '__main__':
         ROBOT_NAME = args.robot
     if args.always_on:
         ACTIVE_ONLY_WHEN_MOVING = False
+    if args.log:
+        LOG_CSV = True
+    if args.log_path:
+        LOG_CSV = True
+        LOG_PATH = args.log_path
 
     main()
