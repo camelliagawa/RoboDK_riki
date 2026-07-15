@@ -77,25 +77,41 @@ FANUC ロボット（Run on Robot 接続）を動かしたときに、**DynPick 
 優先度順：
 
 - [x] **実センサ接続** … `dynpick_sensor.py`（DynPickSensor）を実装し `read_wrench()` に接続済み。既定 `USE_DEMO_SIGNAL=False`。
-- [ ] **接続確認** … `DYNPICK_PORT`（Windows 例 `COM3` / Linux 例 `/dev/ttyUSB0`）と `DYNPICK_BAUD`（既定 921600、機種により 230400 等）を実機に合わせる。
-      応答が来ない場合はポート/ボーレート、`parse_dynpick_line()` の想定形式を確認。
-- [ ] **軸校正** … 既知方向に押して、`AXIS_MAP_FORCE` / `AXIS_MAP_MOMENT` の index・符号を実測で合わせる。
-- [ ] **スケール調整** … `FORCE_SCALE` / `MOMENT_SCALE` を実研削レンジに合わせる。振り切れは `MAX_ARROW_LEN` で調整。
-- [ ] **Busy 検知の確認** … 出足が鈍ければ、関節角変化量による動作検知フォールバックを追加。
-- [ ] **基点の見直し（必要なら）** … TCP とセンサ計測原点のオフセットがある場合、センサ原点用フレームを基点にする。
+- [x] **接続確認** … 実機で確定: `DYNPICK_PORT='COM3'` / `DYNPICK_BAUD=921600`。応答形式もパース確認済み。
+- [x] **軸校正** … `dynpick_calib.py` で実測 + RoboDK上の向き確認により確定:
+      `AXIS_MAP_FORCE = AXIS_MAP_MOMENT = [(1, -1), (2, -1), (0, +1)]`。
+      3方向とも「押した向きに矢印が伸びる」ことを確認済み。
+- [x] **スケール調整** … 実測レンジ(最大 力≈30N/モーメント≈1N·m)から `FORCE_SCALE=7` / `MOMENT_SCALE=200` に設定。実研削で微調整可。
+- [x] **基点の見直し** … `robot.PoseAbs()*SolveFK(Joints,PoseTool)` で参照フレーム非依存の絶対TCPを基点に修正（矢印の浮き解消）。`BASE_OFFSET_TOOL` で微調整可。
+- [x] **RoboDK API 安定化** … 高頻度描画で API が切れる問題に、通信断→自動再接続 + `UPDATE_RATE=10` で対応。
+- [ ] **Busy 検知の確認（本番）** … Run on Robot 接続時、`robot.Busy()` で動作中のみ表示されるか本番で確認。出足が鈍ければ関節角変化フォールバックを検討。
+- [ ] **モーメント向きの確認（任意）** … 力と同じ取付回転を適用済み。必要なら既知トルクで検証。
 - [ ] **モーメント表現の改善（任意）** … 回転を表す二重矢じり／円弧矢印など。
 - [ ] **拡張候補（任意）** … 数値テキスト表示、CSV ログ保存、別ウィンドウのリアルタイムグラフ。
-- [ ] **負荷確認** … 毎ループ `AddCurve`/`Delete` による描画・メモリ負荷を長時間運用で監視。重ければ `UPDATE_RATE` を下げる or 更新方式を再検討。
+- [ ] **負荷確認** … 毎ループ `AddCurve`/`Delete` の描画・メモリ負荷を長時間運用で監視。重ければ `UPDATE_RATE` を下げる or 更新方式を再検討。
 
 ---
 
-## 6. 動作確認手順
+## 6. 実行環境・運用手順（実機で確立済み）
 
-1. RoboDK 起動 → ステーション読み込み → ロボットを **Run on Robot 接続**。
-2. `USE_DEMO_SIGNAL=True` のまま実行 → ダミー波形で赤（力）・青（モーメント）矢印が動くことを確認。
-3. `read_wrench()` を実センサに接続 → `USE_DEMO_SIGNAL=False`。
-4. RoboDK 側で研磨プログラム（kenma 等）を Run → 動作中に矢印が自動表示されることを確認。
-5. 軸・スケールを校正。
+### 実行環境（Windows + Anaconda）
+- 外部 Python（Miniconda base、または Python310）から `python force_moment_overlay.py` で実行。
+  RoboDK を開いておけば robolink が自動接続する。
+- 必要パッケージ: `robodk`, `pyserial`（`pip install robodk pyserial`）。
+  RoboDK ボタン実行するなら、ツール→オプション→Python のインタープリタに、これらを入れた Python を指定。
+- スクリプトは自フォルダを `sys.path` に追加するので、どこから実行しても隣の `dynpick_sensor.py` を読める。
+
+### 確認・運用の順序
+1. **描画テスト**: `python force_moment_overlay.py --demo` → ダミー波形で赤(力)・青(モーメント)矢印が TCP から出れば RoboDK 連携OK。
+2. **接続/校正の道具**（RoboDK不要, センサのみ）:
+   - `python dynpick_check.py --list` / `--scan-baud` / ライブ表示 … ポート・ボーレート確認、最大値からスケール目安。
+   - `python dynpick_calib.py --port COM3 --baud 921600` … 対話式で各ツール軸を押して `AXIS_MAP` を決定。
+3. **実センサ手押し**: `python force_moment_overlay.py --always-on` → 停止中でも常時表示。押した向きに矢印が伸びるか確認。
+4. **本番**: `python force_moment_overlay.py`（既定 = 実センサ + 動作中のみ表示）を起動 → RoboDK で研磨プログラム(kenma)を Run。
+   起動時 `零点測定中…` の間はツールに触れない。**本番ツール(包丁)装着後に一度 tare し直すと零点が正確**。
+
+### 起動オプション（ファイルを編集せず切替）
+`--demo` / `--port` / `--baud` / `--robot` / `--always-on`
 
 ---
 
