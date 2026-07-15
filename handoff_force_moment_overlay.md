@@ -84,7 +84,8 @@ FANUC ロボット（Run on Robot 接続）を動かしたときに、**DynPick 
 - [x] **スケール調整** … 実測レンジ(最大 力≈30N/モーメント≈1N·m)から `FORCE_SCALE=7` / `MOMENT_SCALE=200` に設定。実研削で微調整可。
 - [x] **基点の見直し** … `robot.PoseAbs()*SolveFK(Joints,PoseTool)` で参照フレーム非依存の絶対TCPを基点に修正（矢印の浮き解消）。`BASE_OFFSET_TOOL` で微調整可。
 - [x] **RoboDK API 安定化** … 高頻度描画で API が切れる問題に、通信断→自動再接続 + `UPDATE_RATE=10` で対応。
-- [ ] **Busy 検知の確認（本番）** … Run on Robot 接続時、`robot.Busy()` で動作中のみ表示されるか本番で確認。出足が鈍ければ関節角変化フォールバックを検討。
+- [x] **動作検知の強化** … `robot.Busy()` に加え **関節角変化フォールバック** を実装（`MOTION_DETECT='both'`）。Busy が鈍い/立たない場合も関節角の変化で検知。`MOTION_HOLD_S` で検知後の途切れ防止。`--detect busy|joints|both` で切替可。
+      ※ 関節角検知は RoboDK が実機に接続（Run on Robot / モニタ）して実関節角を読める前提。未接続だとシミュレーション関節角しか見えない点に注意。
 - [ ] **モーメント向きの確認（任意）** … 力と同じ取付回転を適用済み。必要なら既知トルクで検証。
 - [ ] **モーメント表現の改善（任意）** … 回転を表す二重矢じり／円弧矢印など。
 - [x] **CSV ログ保存** … 動作中の力/モーメントを CSV 記録（`--log`）。時刻・生値(N,N·m)・|F|/|M|・TCP位置を出力。`ForceLogger` クラスで実装。
@@ -112,7 +113,7 @@ FANUC ロボット（Run on Robot 接続）を動かしたときに、**DynPick 
    起動時 `零点測定中…` の間はツールに触れない。**本番ツール(包丁)装着後に一度 tare し直すと零点が正確**。
 
 ### 起動オプション（ファイルを編集せず切替）
-`--demo` / `--port` / `--baud` / `--robot` / `--always-on` / `--log` / `--log-path`
+`--demo` / `--port` / `--baud` / `--robot` / `--always-on` / `--detect busy|joints|both` / `--log` / `--log-path`
 
 ### CSV記録（動作中の力/モーメントを保存）
 - `python force_moment_overlay.py --log` … 実センサ + 動作中のみ表示に加え、**動作中の計測をCSVに記録**。
