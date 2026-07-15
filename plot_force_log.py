@@ -1,0 +1,190 @@
+# -*- coding: utf-8 -*-
+"""
+force_log_*.csv から 力/モーメントの時系列グラフを生成するツール。
+
+使い方:
+  python plot_force_log.py                     # 最新の force_log_*.csv を自動で開く
+  python plot_force_log.py force_log_xxx.csv   # 指定ファイル
+  python plot_force_log.py --no-show           # 画面表示せず PNG 保存のみ
+  python plot_force_log.py --contact 3.0       # |F|>=3N の区間を加工区間として薄く塗る
+
+出力: 同じ場所に <csvと同名>.png を保存し、画面にも表示する。
+依存: matplotlib（pip install matplotlib）。numpy 等は不要。
+"""
+
+import os
+import sys
+import csv
+import glob
+import argparse
+
+# 力[N] と モーメント[N*m] はスケールが違うので、デュアル軸にせず 2段に分ける。
+# X/Y/Z の3系列は色覚異常でも区別できる Okabe-Ito 配色を固定順で割り当て、
+# 合力 |F|・合モーメント |M| は太い濃色（ink）で強調する。
+COLOR_X = '#D55E00'   # vermillion
+COLOR_Y = '#009E73'   # green
+COLOR_Z = '#0072B2'   # blue
+COLOR_MAG = '#222222'  # 濃いグレー（合成値の強調線）
+GRID_COLOR = '#CCCCCC'
+
+
+def find_latest_csv(folder):
+    """folder 内で最も新しい force_log_*.csv を返す。無ければ None。"""
+    files = glob.glob(os.path.join(folder, 'force_log_*.csv'))
+    if not files:
+        return None
+    return max(files, key=os.path.getmtime)
+
+
+def load_log(path):
+    """CSV を読み、列名→float リストの dict を返す。"""
+    cols = {k: [] for k in
+            ('t_s', 'fx_N', 'fy_N', 'fz_N', 'mx_Nm', 'my_Nm', 'mz_Nm',
+             'Fmag_N', 'Mmag_Nm')}
+    with open(path, 'r', newline='', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            try:
+                vals = {k: float(row[k]) for k in cols}
+            except (KeyError, ValueError):
+                continue   # 壊れた行/空行は飛ばす
+            for k in cols:
+                cols[k].append(vals[k])
+    return cols
+
+
+def _argmax(values):
+    """最大値のインデックスと値を返す。空なら (None, None)。"""
+    if not values:
+        return None, None
+    idx = max(range(len(values)), key=lambda i: values[i])
+    return idx, values[idx]
+
+
+def summarize(d):
+    """統計を dict で返す（表示・タイトル用）。"""
+    t = d['t_s']
+    s = {}
+    s['n'] = len(t)
+    s['dur'] = (t[-1] - t[0]) if len(t) >= 2 else 0.0
+    s['rate'] = (s['n'] / s['dur']) if s['dur'] > 0 else 0.0
+    fi, fmax = _argmax(d['Fmag_N'])
+    mi, mmax = _argmax(d['Mmag_Nm'])
+    s['fmax'] = fmax
+    s['fmax_t'] = t[fi] if fi is not None else None
+    s['mmax'] = mmax
+    s['mmax_t'] = t[mi] if mi is not None else None
+    s['fmean'] = (sum(d['Fmag_N']) / len(d['Fmag_N'])) if d['Fmag_N'] else 0.0
+    return s
+
+
+def make_figure(d, s, title, contact=None):
+    import matplotlib.pyplot as plt
+
+    t = d['t_s']
+    fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(11, 7))
+
+    # --- 上段: 力 [N] ---
+    ax1.plot(t, d['fx_N'], color=COLOR_X, lw=1.2, label='Fx')
+    ax1.plot(t, d['fy_N'], color=COLOR_Y, lw=1.2, label='Fy')
+    ax1.plot(t, d['fz_N'], color=COLOR_Z, lw=1.2, label='Fz')
+    ax1.plot(t, d['Fmag_N'], color=COLOR_MAG, lw=2.0, label='|F|')
+    if s['fmax_t'] is not None:
+        ax1.annotate('max |F| = %.1f N' % s['fmax'],
+                     xy=(s['fmax_t'], s['fmax']),
+                     xytext=(8, -14), textcoords='offset points',
+                     fontsize=9, color=COLOR_MAG)
+        ax1.plot([s['fmax_t']], [s['fmax']], 'o', color=COLOR_MAG, ms=5)
+    ax1.set_ylabel('Force [N]')
+    ax1.grid(True, color=GRID_COLOR, lw=0.6)
+    ax1.legend(loc='upper right', ncol=4, framealpha=0.9)
+    ax1.set_title(title, fontsize=11)
+
+    # --- 下段: モーメント [N*m] ---
+    ax2.plot(t, d['mx_Nm'], color=COLOR_X, lw=1.2, label='Mx')
+    ax2.plot(t, d['my_Nm'], color=COLOR_Y, lw=1.2, label='My')
+    ax2.plot(t, d['mz_Nm'], color=COLOR_Z, lw=1.2, label='Mz')
+    ax2.plot(t, d['Mmag_Nm'], color=COLOR_MAG, lw=2.0, label='|M|')
+    ax2.set_ylabel('Moment [N*m]')
+    ax2.set_xlabel('Time [s]')
+    ax2.grid(True, color=GRID_COLOR, lw=0.6)
+    ax2.legend(loc='upper right', ncol=4, framealpha=0.9)
+
+    # --- 加工区間（|F|>=contact）を薄く塗る（任意）---
+    if contact is not None:
+        for ax in (ax1, ax2):
+            _shade_contact(ax, t, d['Fmag_N'], contact)
+
+    fig.tight_layout()
+    return fig
+
+
+def _shade_contact(ax, t, fmag, thr):
+    """|F|>=thr の連続区間を軽く塗る。"""
+    start = None
+    for i in range(len(t)):
+        on = fmag[i] >= thr
+        if on and start is None:
+            start = t[i]
+        elif not on and start is not None:
+            ax.axvspan(start, t[i], color='#F0C000', alpha=0.12)
+            start = None
+    if start is not None:
+        ax.axvspan(start, t[-1], color='#F0C000', alpha=0.12)
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description='force_log_*.csv から力/モーメントの時系列グラフを作る')
+    ap.add_argument('csv', nargs='?',
+                    help='CSVファイル（省略時は最新の force_log_*.csv を自動選択）')
+    ap.add_argument('--no-show', action='store_true',
+                    help='画面表示せず PNG 保存のみ')
+    ap.add_argument('--contact', type=float, default=None,
+                    help='この[N]以上を加工区間として薄く塗る 例 3.0')
+    args = ap.parse_args()
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    path = args.csv or find_latest_csv(here) or find_latest_csv(os.getcwd())
+    if not path or not os.path.isfile(path):
+        print('CSVが見つかりません。force_log_*.csv を作ってから実行してください。')
+        print('（記録は  python force_moment_overlay.py --no-robodk --log ）')
+        return 2
+
+    d = load_log(path)
+    if not d['t_s']:
+        print('データ行がありません:', path)
+        return 2
+    s = summarize(d)
+
+    # 統計を端末に表示
+    print('ファイル :', path)
+    print('サンプル : %d 点 / %.1f 秒 (約 %.1f Hz)' % (s['n'], s['dur'], s['rate']))
+    print('最大 |F| : %.2f N  (t=%.1fs)' % (s['fmax'], s['fmax_t']))
+    print('最大 |M| : %.3f N*m (t=%.1fs)' % (s['mmax'], s['mmax_t']))
+    print('平均 |F| : %.2f N' % s['fmean'])
+
+    try:
+        import matplotlib
+        if args.no_show:
+            matplotlib.use('Agg')   # 画面なしでも保存できるように
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print('matplotlib がありません。 pip install matplotlib を実行してください。')
+        return 3
+
+    title = '%s   |   max|F|=%.1fN  max|M|=%.2fN*m  (%.0fs)' % (
+        os.path.basename(path), s['fmax'], s['mmax'], s['dur'])
+    fig = make_figure(d, s, title, contact=args.contact)
+
+    png = os.path.splitext(path)[0] + '.png'
+    fig.savefig(png, dpi=120)
+    print('グラフを保存 :', png)
+
+    if not args.no_show:
+        plt.show()
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

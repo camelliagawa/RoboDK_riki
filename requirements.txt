@@ -6,4 +6,8 @@ pyserial>=3.5
 # robolink / robodk : RoboDK Python API。
 #   通常は RoboDK 本体に同梱の Python から利用できるため pip 不要。
 #   別環境で使う場合のみ `pip install robodk` を実行する。
+#   ※ --no-robodk（記録のみ）モードでは robodk は不要（遅延importのため）。
 # robodk>=5.5
+
+# matplotlib : plot_force_log.py で記録CSVから時系列グラフを描画する場合に必要。
+matplotlib>=3.5

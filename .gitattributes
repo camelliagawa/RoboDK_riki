@@ -1,0 +1,2 @@
+# Windows のバッチファイルは CRLF 改行で取り出す（cmd.exe 互換のため）
+*.bat text eol=crlf
