@@ -55,10 +55,9 @@ EMA_ALPHA       = 0.4    # 0<..<=1  表示のローパス（1で無効）
 ACTIVE_ONLY_WHEN_MOVING = True   # True: ロボット動作中のみ表示（自動スタート）
 
 # センサ生値 -> ツール座標 の軸割当  (生値のindex, 符号)。取付向きに合わせて調整。
-# 実機校正結果(ツール軸に押して判定): toolX<-sensor1(-), toolY<-sensor0(+), toolZ<-sensor2(+)
-#   ※ toolZ は X,Y の外積から確定（右手系）。実測で符号が逆なら (2, -1) に変更。
-AXIS_MAP_FORCE  = [(1, -1), (0, +1), (2, +1)]
-AXIS_MAP_MOMENT = [(1, -1), (0, +1), (2, +1)]   # 取付回転は力と同じ
+# 実機校正(dynpick_calib.py, 1.5秒平均): toolX<-sensor0(-), toolY<-sensor1(-), toolZ<-sensor2(+)
+AXIS_MAP_FORCE  = [(0, -1), (1, -1), (2, +1)]
+AXIS_MAP_MOMENT = [(0, -1), (1, -1), (2, +1)]   # 取付回転は力と同じ
 
 # 矢印の基点オフセット [mm]（TCP座標系）。TCPとセンサ計測原点/刃先がずれている場合に
 # 根元位置を調整する。例: 刃先方向(+Z)に50mm出すなら [0,0,50]。既定は TCP そのもの。
