@@ -109,7 +109,9 @@ FANUC ロボットで包丁の研磨（TORMEK T-8）を行う際に、**DynPick 
 - どちらのPCでも見られるようにするため、**両PCに matplotlib を入れておく**（記録用PCが未導入なら `pip install matplotlib`）。
 
 ### 起動オプション（ファイルを編集せず切替）
-`--demo` / `--port` / `--baud` / `--robot` / `--always-on` / `--detect busy|joints|both` / `--log` / `--log-path` / `--no-robodk`
+`--demo` / `--port` / `--baud` / `--robot` / `--always-on` / `--detect busy|joints|both` / `--log` / `--log-path` / `--no-robodk` / `--no-open`
+
+- `--no-open` … 記録終了(Ctrl+C)後に **CSVの保存フォルダをエクスプローラーで自動表示しない**。既定は自動で開く（保存したCSVを選択した状態でフォルダが開く）。
 
 ### 補助ツール（センサのみ、RoboDK不要）
 - `python dynpick_check.py --list` / `--scan-baud` / ライブ表示 … ポート・ボーレート確認、最大値からスケール目安。

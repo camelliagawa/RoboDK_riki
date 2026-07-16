@@ -240,6 +240,32 @@ class ForceLogger:
             pass
 
 
+# 保存後に、CSV のあるフォルダをエクスプローラーで開く（ファイルを選択した状態）。
+OPEN_FOLDER_ON_SAVE = True
+
+def _reveal_in_explorer(path):
+    """保存した CSV をエクスプローラーで選択表示する。失敗しても記録には影響しない。
+
+    Windows: explorer /select でフォルダを開きファイルを選択。
+    mac/Linux: フォルダを開くだけ（フォールバック）。
+    """
+    if not OPEN_FOLDER_ON_SAVE:
+        return
+    try:
+        if not path or not os.path.isfile(path):
+            return
+        import subprocess
+        full = os.path.normpath(os.path.abspath(path))
+        if sys.platform.startswith('win'):
+            subprocess.Popen(['explorer', '/select,' + full])
+        elif sys.platform == 'darwin':
+            subprocess.Popen(['open', '-R', full])
+        else:
+            subprocess.Popen(['xdg-open', os.path.dirname(full)])
+    except Exception:
+        pass
+
+
 # ---------- センサ読み取り ----------
 _SENSOR = None   # DynPickSensor インスタンス（実センサ使用時に main() で生成）
 
@@ -330,6 +356,7 @@ def main_headless():
     finally:
         logger.close()
         print('\nCSV記録を保存しました（%d 行）: %s' % (logger.rows, logger.path))
+        _reveal_in_explorer(logger.path)
         if _SENSOR is not None:
             _SENSOR.close()
 
@@ -473,6 +500,7 @@ def main():
         if logger is not None:
             logger.close()
             print('CSV記録を保存しました（%d 行）: %s' % (logger.rows, logger.path))
+            _reveal_in_explorer(logger.path)
         if _SENSOR is not None:
             _SENSOR.close()
 
@@ -497,6 +525,8 @@ if __name__ == '__main__':
                     help='CSVの保存先パス（既定: force_log_日時.csv をスクリプトと同じフォルダに生成）')
     ap.add_argument('--no-robodk', action='store_true',
                     help='RoboDKを使わずセンサ読み取り＋CSV記録のみ（ペンダントでロボットを動かす構成向け。常時記録）')
+    ap.add_argument('--no-open', action='store_true',
+                    help='保存後にエクスプローラーでCSVフォルダを開かない')
     args = ap.parse_args()
 
     # コマンドライン引数で冒頭パラメータを上書き（ファイルを編集せずに切替できる）
@@ -519,6 +549,8 @@ if __name__ == '__main__':
         LOG_PATH = args.log_path
     if args.no_robodk:
         USE_ROBODK = False
+    if args.no_open:
+        OPEN_FOLDER_ON_SAVE = False
 
     if USE_ROBODK:
         main()
