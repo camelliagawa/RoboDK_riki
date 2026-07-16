@@ -1,7 +1,18 @@
 # 引き継ぎ書 : DynPick 力覚センサ 力/モーメント 記録・可視化
 
 > Claude Code での継続作業用ハンドオフ。まず本書と `force_moment_overlay.py` / `plot_force_log.py` を読んでから着手すること。
-> 作業ブランチ: `claude/handoff-doc-update-ly2ak8`（旧 `claude/force-moment-viz-complete-fv2yz1` の内容も統合済み）
+
+## 🔖 次セッションの作業ブランチ（毎回ここを最新化する）
+
+- **継続作業ブランチ: `claude/handoff-doc-update-ly2ak8`**
+- 既定ブランチ: `claude/riki-handover-review-g7dngo` / このブランチの PR: **[#1](https://github.com/camelliagawa/RoboDK_riki/pull/1)**
+- 使い方:
+  - **PR #1 が未マージ** → 上記 `claude/handoff-doc-update-ly2ak8` をそのまま継続してコミット。
+  - **PR #1 がマージ済み** → 既定ブランチ `claude/riki-handover-review-g7dngo` から**新しいブランチを切って**作業（マージ済み履歴の上に積まない）。切ったら**この欄のブランチ名を必ず書き換える**。
+- ルール: **各セッションの終わりに、この「次セッションの作業ブランチ」欄を必ず更新する。**
+
+### 最近の更新（2026-07-16 セッション, 版 2026-07-16.6）
+`plot_force_log.py` を報告書向けに強化: 線種の系列別指定（既定 破線/点線/一点鎖線/実線）・操作パネルのカード刷新・軸ラベル編集・力/モーメントの単体クリーン保存（タイトル無し）・凡例重なり回避・Shade/Max pt 既定OFF・**CSVドラッグ&ドロップ**（不正CSVはエラーダイアログ）・**空運転差引の自動化＋Baselineトグル**（`air.csv` 自動検出、`--raw` で無効）・版表示・最新CSVをファイル名日時で判定・サンプル同梱（`samples/force_log_*.csv`, `samples/air.csv`）。
 
 ---
 
