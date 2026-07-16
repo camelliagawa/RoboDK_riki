@@ -23,7 +23,7 @@ import argparse
 
 # 実行中のコードの版。機能を変えたら日付.通番を上げる。起動時に端末・ウィンドウ
 # タイトル・操作パネルに表示され、「いま最新版で動いているか」を判別できるようにする。
-APP_VERSION = '2026-07-16.2'
+APP_VERSION = '2026-07-16.3'
 
 # =====================================================================
 #  グラフのデザイン設定（ここを編集すれば見た目を自由に変更できます）
@@ -69,7 +69,7 @@ STYLE = {
     'moment_ylim_min': None, 'moment_ylim_max': None,
 
     # --- 最大点の注釈 ---
-    'annotate_max': True,
+    'annotate_max': False,  # 最大点マーカー/注釈（既定OFF。パネルの Max pt でON可）
     'annotate_fontsize': 9,
 
     # --- 系列の表示ON/OFF（不要な線を消せる）---
@@ -82,7 +82,7 @@ STYLE = {
     'show_xaxis': True,     # 横軸（目盛り＋ラベル）
     'show_yaxis': True,     # 縦軸（目盛り＋ラベル）
     'show_grid': True,      # グリッド線
-    'show_shade': True,     # 加工区間の黄色塗り
+    'show_shade': False,    # 加工区間の黄色塗り（既定OFF。パネルの Shade でON可）
     'force_xaxis': True,    # 力(上段)グラフにも Time[s] 目盛りを表示
 
     # --- 線種（'-'=実線, '--'=破線, ':'=点線, '-.'=一点鎖線）系列ごとに指定可 ---
@@ -461,41 +461,80 @@ COLOR_THEMES = {
 
 
 def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
-    """グラフ右側に操作パネルを常時表示する。
-    系列ON/OFF・要素ON/OFF(タイトル/凡例/軸/グリッド/塗り/最大点)・範囲入力・配色・線種・
-    力/モーメントの個別保存・タイトル変更。
+    """グラフ右側に操作パネルを常時表示する（カード状にグループ分け）。
+
+    Series/Elements の表示ON/OFF・表示範囲・配色・線種（成分別）・力/モーメントの
+    個別保存（保存結果を画面にも表示）・タイトル変更。保存は「力だけ」「モーメントだけ」の
+    クリーンな単体PNGを書き出す（操作パネルや隣のグラフは入らない）。
     """
     from matplotlib.widgets import CheckButtons, TextBox, Button
+    from matplotlib.patches import FancyBboxPatch
 
     S = fig._fml['style'] if hasattr(fig, '_fml') else STYLE
-    fig.set_size_inches(max(fig.get_figwidth(), 14), max(fig.get_figheight(), 8))
-    fig.subplots_adjust(left=0.07, right=0.63, top=0.93, bottom=0.09, hspace=0.20)
-    # 版を図の右上隅に小さく表示（パネルは保存PNGより後に付くので保存画像には入らない）
-    fig.text(0.995, 0.985, 'ver ' + APP_VERSION, ha='right', va='top',
-             fontsize=8, color='#888888')
+    fig.set_size_inches(max(fig.get_figwidth(), 14.0), max(fig.get_figheight(), 8.4))
+    fig.subplots_adjust(left=0.06, right=0.62, top=0.94, bottom=0.08, hspace=0.22)
+
+    # 版を図の右上隅に小さく（パネルは保存PNGより後に付くので保存画像には入らない）
+    fig.text(0.992, 0.987, 'ver ' + APP_VERSION, ha='right', va='top',
+             fontsize=8, color='#9aa0a6')
+
     keep = []
     fkeys = ('fx', 'fy', 'fz', 'fmag')
     mkeys = ('mx', 'my', 'mz', 'mmag')
+
+    # ---- 配置・配色をパネル全体で一貫させる共通定義 ----
+    L, R = 0.655, 0.988
+    W = R - L
+    HEAD_C, SUB_C = '#2b2b2b', '#5f6368'
+    BTN_C, BTN_HOVER = '#eceef1', '#dbe0e7'
+
+    def card(y0, y1):
+        """[y0, y1] を覆う角丸の薄いカード背景（グループの視認性を上げる）。"""
+        pad = 0.008
+        fig.patches.append(FancyBboxPatch(
+            (L - pad, y0 - pad), W + 2 * pad, (y1 - y0) + 2 * pad,
+            boxstyle='round,pad=0,rounding_size=0.012', transform=fig.transFigure,
+            zorder=-10, facecolor='#f6f7f9', edgecolor='#d6d9df', linewidth=1.0))
+
+    def head(x, y, s, size=10.5):
+        fig.text(x, y, s, fontsize=size, color=HEAD_C, fontweight='bold',
+                 ha='left', va='center')
+
+    def note(x, y, s, size=8, ha='left'):
+        fig.text(x, y, s, fontsize=size, color=SUB_C, ha=ha, va='center')
+
+    def button_row(y, h, items, make_cb, hover=BTN_HOVER, keepmap=None):
+        """L..R に等間隔で並べるボタン行。keepmap を渡すと {val: Button} を書き込む。"""
+        n = len(items); gap = 0.009; w = (W - (n - 1) * gap) / n
+        for i, (label, val) in enumerate(items):
+            b = Button(fig.add_axes([L + i * (w + gap), y, w, h]), label,
+                       color=BTN_C, hovercolor=hover)
+            b.label.set_fontsize(9.5)
+            b.on_clicked(make_cb(val)); keep.append(b)
+            if keepmap is not None:
+                keepmap[val] = b
 
     def redraw_legends():
         _refresh_legend(ax1, lines, fkeys, leg)
         _refresh_legend(ax2, lines, mkeys, leg)
 
-    def txt(rect, s, size=9):
-        a = fig.add_axes(rect); a.axis('off'); a.text(0, 0.2, s, fontsize=size)
+    # =====================================================================
+    #  1) Series / Elements（表示ON/OFF）
+    # =====================================================================
+    card(0.590, 0.958)
+    head(L + 0.006, 0.945, 'Series')
+    head(0.826, 0.945, 'Elements')
 
-    # --- 系列ON/OFF（左カラム）---
     order = [('fx', 'Fx'), ('fy', 'Fy'), ('fz', 'Fz'), ('fmag', '|F|'),
              ('mx', 'Mx'), ('my', 'My'), ('mz', 'Mz'), ('mmag', '|M|')]
     slabels = [lb for _, lb in order]
-    ax_s = fig.add_axes([0.655, 0.58, 0.15, 0.37])
-    ax_s.set_title('Series', fontsize=9)
+    ax_s = fig.add_axes([0.664, 0.598, 0.150, 0.328]); ax_s.set_axis_off()
     scolors = [lines[k].get_color() for k, _ in order]
     try:
         chk_s = CheckButtons(ax_s, slabels, [lines[k].get_visible() for k, _ in order],
-                             frame_props={'s': 90, 'facecolor': 'white',
-                                          'edgecolor': '#999999', 'linewidth': 1.1},
-                             check_props={'s': 90, 'facecolor': scolors},
+                             frame_props={'s': 96, 'facecolor': 'white',
+                                          'edgecolor': '#9aa0a6', 'linewidth': 1.1},
+                             check_props={'s': 96, 'facecolor': scolors},
                              label_props={'color': scolors})
     except TypeError:
         chk_s = CheckButtons(ax_s, slabels, [lines[k].get_visible() for k, _ in order])
@@ -504,10 +543,8 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
         k = order[slabels.index(label)][0]
         lines[k].set_visible(not lines[k].get_visible())
         redraw_legends(); fig.canvas.draw_idle()
-    chk_s.on_clicked(on_series)
-    keep.append(chk_s)
+    chk_s.on_clicked(on_series); keep.append(chk_s)
 
-    # --- 要素ON/OFF（右カラム）---
     grid_on = [S['show_grid']]
     has_max = getattr(ax1, '_maxann', None) is not None
     elabels = ['Title', 'Legend', 'X-axis', 'Y-axis', 'Grid', 'Shade', 'Max pt']
@@ -516,13 +553,12 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
               ax2.get_xaxis().get_visible(), ax1.get_yaxis().get_visible(),
               grid_on[0], any(p.get_visible() for p in ax1._shade_patches),
               bool(has_max and ax1._maxann.get_visible())]
-    ax_e = fig.add_axes([0.82, 0.58, 0.17, 0.37])
-    ax_e.set_title('Elements', fontsize=9)
+    ax_e = fig.add_axes([0.827, 0.598, 0.150, 0.328]); ax_e.set_axis_off()
     try:
         chk_e = CheckButtons(ax_e, elabels, estate,
-                             frame_props={'s': 90, 'facecolor': 'white',
-                                          'edgecolor': '#999999', 'linewidth': 1.1},
-                             check_props={'s': 90, 'facecolor': '#444444'})
+                             frame_props={'s': 96, 'facecolor': 'white',
+                                          'edgecolor': '#9aa0a6', 'linewidth': 1.1},
+                             check_props={'s': 96, 'facecolor': '#444444'})
     except TypeError:
         chk_e = CheckButtons(ax_e, elabels, estate)
 
@@ -551,22 +587,25 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
                     ax.grid(False)
         elif label == 'Shade':
             for ax in (ax1, ax2):
-                for p in ax._shade_patches:
-                    p.set_visible(not p.get_visible())
+                for pch in ax._shade_patches:
+                    pch.set_visible(not pch.get_visible())
         elif label == 'Max pt':
             if getattr(ax1, '_maxann', None) is not None:
                 v = not ax1._maxann.get_visible()
                 ax1._maxann.set_visible(v)
                 ax1._maxdot.set_visible(v)
         fig.canvas.draw_idle()
-    chk_e.on_clicked(on_element)
-    keep.append(chk_e)
+    chk_e.on_clicked(on_element); keep.append(chk_e)
 
-    # --- 範囲入力（"min max"、空でオート）---
-    txt([0.655, 0.545, 0.34, 0.03], 'Range  "min max"  (Enter; empty=Auto)', 8)
+    # =====================================================================
+    #  2) View range
+    # =====================================================================
+    card(0.398, 0.575)
+    head(L + 0.006, 0.560, 'View range')
+    note(L + 0.006, 0.539, 'type "min  max", Enter  ·  empty = Auto')
 
     def make_range_box(y, label, ax_target, axis):
-        tb = TextBox(fig.add_axes([0.735, y, 0.20, 0.04]), label, initial='')
+        tb = TextBox(fig.add_axes([0.748, y, 0.160, 0.033]), label, initial='')
 
         def submit(text):
             text = text.strip()
@@ -580,27 +619,25 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
             except Exception:
                 pass
         tb.on_submit(submit); keep.append(tb)
-    make_range_box(0.495, 'X [s]', ax1, 'x')
-    make_range_box(0.445, 'F [N]', ax1, 'y')
-    make_range_box(0.395, 'M[Nm]', ax2, 'y')
-    btn_auto = Button(fig.add_axes([0.735, 0.340, 0.20, 0.045]), 'Auto range')
+    make_range_box(0.502, 'X [s]', ax1, 'x')
+    make_range_box(0.462, 'F [N]', ax1, 'y')
+    make_range_box(0.422, 'M [Nm]', ax2, 'y')
+    b_auto = Button(fig.add_axes([0.748, 0.402, 0.160, 0.030]), 'Auto range',
+                    color=BTN_C, hovercolor=BTN_HOVER)
+    b_auto.label.set_fontsize(9.5)
 
     def on_auto(_):
         for ax in (ax1, ax2):
             ax.relim(); ax.autoscale()
         fig.canvas.draw_idle()
-    btn_auto.on_clicked(on_auto); keep.append(btn_auto)
+    b_auto.on_clicked(on_auto); keep.append(b_auto)
 
-    # 1行N個のボタンを x=0.655..0.99 に等間隔で並べる小ヘルパ
-    def button_row(y, items, make_cb, hover=None):
-        n = len(items); gap = 0.008; w = (0.335 - (n - 1) * gap) / n
-        for i, (label, val) in enumerate(items):
-            b = Button(fig.add_axes([0.655 + i * (w + gap), y, w, 0.042]),
-                       label, hovercolor=hover or '0.85')
-            b.on_clicked(make_cb(val)); keep.append(b)
-
-    # --- 配色テーマ（1行4）---
-    txt([0.655, 0.305, 0.2, 0.025], 'Colors', 9)
+    # =====================================================================
+    #  3) Colors（配色テーマ）
+    # =====================================================================
+    card(0.312, 0.380)
+    head(L + 0.006, 0.367, 'Colors')
+    note(R - 0.006, 0.367, 'Mono also sets line styles', ha='right')
 
     def theme_cb(nm):
         def f(_e):
@@ -616,28 +653,14 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
                     lines[k].set_linestyle(ls)
             redraw_legends(); fig.canvas.draw_idle()
         return f
-    button_row(0.258, [(n, n) for n in COLOR_THEMES], theme_cb)
+    button_row(0.320, 0.038, [(n, n) for n in COLOR_THEMES], theme_cb)
 
-    # --- 力/モーメントの個別保存（1行3）---
-    txt([0.655, 0.212, 0.3, 0.025], 'Save image', 9)
-
-    def save_cb(which):
-        def f(_e):
-            if not save_base:
-                return
-            axes = {'f': [ax1], 'm': [ax2], 'b': [ax1, ax2]}[which]
-            suffix = {'f': 'force', 'm': 'moment', 'b': 'both'}[which]
-            out = save_axes_region(fig, axes, save_base + '_' + suffix + '.png', save_dpi)
-            print('保存:', out)
-        return f
-    button_row(0.165, [('Force', 'f'), ('Moment', 'm'), ('Both', 'b')], save_cb,
-               hover='#bfe3bf')
-
-    # --- 線種（対象を選んでから線種。モノクロでも各系列を区別できる）---
-    #  全系列一括ではなく、成分ごと(X/Y/Z/|·|)に線種を変えられる。例えば X を選ぶと
-    #  力(Fx)とモーメント(Mx)の両方に効く（配色テーマと同じ成分グルーピング）。
-    #  「All」は従来どおり全系列まとめて変えるショートカット。
-    txt([0.655, 0.132, 0.34, 0.025], 'Line style  (pick target → style)', 9)
+    # =====================================================================
+    #  4) Line style（対象を選んでから線種＝成分ごとに変えられる）
+    # =====================================================================
+    card(0.168, 0.300)
+    head(L + 0.006, 0.287, 'Line style')
+    note(0.760, 0.287, 'pick target, then style')
 
     ls_groups = {
         'All': ('fx', 'fy', 'fz', 'fmag', 'mx', 'my', 'mz', 'mmag'),
@@ -652,30 +675,20 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
     def hl_target():
         """現在選択中の対象ボタンだけをハイライトする。"""
         for nm, b in ls_tbtns.items():
-            c = '#ffd27f' if nm == ls_target[0] else '0.95'
+            c = '#ffce7a' if nm == ls_target[0] else BTN_C
             b.color = c
             b.ax.set_facecolor(c)
         fig.canvas.draw_idle()
-
-    # 高さ・戻り値付きのボタン行（対象ボタンをハイライト管理したいので button_row と別に用意）
-    def row_buttons(y, items, make_cb, hover, h=0.036):
-        out = {}
-        n = len(items); gap = 0.008; w = (0.335 - (n - 1) * gap) / n
-        for i, (label, val) in enumerate(items):
-            b = Button(fig.add_axes([0.655 + i * (w + gap), y, w, h]),
-                       label, hovercolor=hover)
-            b.on_clicked(make_cb(val)); keep.append(b)
-            out[val] = b
-        return out
 
     def target_cb(nm):
         def f(_e):
             ls_target[0] = nm
             hl_target()
         return f
-    ls_tbtns = row_buttons(
-        0.092, [('All', 'All'), ('X', 'X'), ('Y', 'Y'), ('Z', 'Z'), ('|·|', '|·|')],
-        target_cb, hover='#ffe6b3')
+    button_row(0.234, 0.036,
+               [('All', 'All'), ('X', 'X'), ('Y', 'Y'), ('Z', 'Z'),
+                ('|·|', '|·|')],
+               target_cb, hover='#ffe6b3', keepmap=ls_tbtns)
 
     def ls_cb(ch):
         def f(_e):
@@ -683,12 +696,42 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
                 lines[k].set_linestyle(ch)
             redraw_legends(); fig.canvas.draw_idle()
         return f
-    row_buttons(0.052, [('Solid', '-'), ('Dashed', '--'),
-                        ('Dotted', ':'), ('DashDot', '-.')], ls_cb, hover='#c8e0ff')
+    button_row(0.192, 0.036, [('Solid', '-'), ('Dashed', '--'),
+                              ('Dotted', ':'), ('DashDot', '-.')], ls_cb, hover='#c8e0ff')
     hl_target()
 
-    # --- タイトル文字の変更 ---
-    tb_title = TextBox(fig.add_axes([0.720, 0.020, 0.270, 0.038]), 'Title',
+    # =====================================================================
+    #  5) Save image（力だけ / モーメントだけ のクリーンな単体PNG）
+    # =====================================================================
+    card(0.070, 0.158)
+    head(L + 0.006, 0.146, 'Save image')
+    save_status = fig.text(L + 0.006, 0.082,
+                           'saves Force / Moment as separate clean PNGs',
+                           fontsize=8, color=SUB_C, ha='left', va='center')
+
+    def save_cb(which):
+        def f(_e):
+            if not save_base:
+                save_status.set_text('no save path (open a CSV first)')
+                save_status.set_color('#b00020'); fig.canvas.draw_idle(); return
+            ax = ax1 if which == 'f' else ax2
+            suffix = 'force' if which == 'f' else 'moment'
+            try:
+                out = save_axes_region(fig, [ax], save_base + '_' + suffix + '.png', save_dpi)
+                print('保存:', out)
+                save_status.set_text('saved: ' + os.path.basename(out))
+                save_status.set_color('#1a7f37')
+            except Exception as e:
+                save_status.set_text('save failed: %s' % e)
+                save_status.set_color('#b00020')
+            fig.canvas.draw_idle()
+        return f
+    button_row(0.100, 0.038, [('Force', 'f'), ('Moment', 'm')], save_cb, hover='#bfe3bf')
+
+    # =====================================================================
+    #  6) Title（グラフのキャプション）
+    # =====================================================================
+    tb_title = TextBox(fig.add_axes([0.735, 0.020, 0.250, 0.034]), 'Title ',
                        initial=fig._fml.get('title_text', '') if hasattr(fig, '_fml') else '')
 
     def on_title(text):
@@ -699,7 +742,6 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
 
     fig._panel_widgets = keep
     return keep
-
 
 def _shade_contact(ax, t, fmag, thr, color='#F0C000', alpha=0.12):
     """|F|>=thr の連続区間を軽く塗る。塗ったパッチのリストを返す（表示ON/OFF用）。"""
