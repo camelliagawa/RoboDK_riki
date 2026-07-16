@@ -16,9 +16,14 @@ import os
 import re
 import sys
 import csv
+import time
 import glob
 import json
 import argparse
+
+# 実行中のコードの版。機能を変えたら日付.通番を上げる。起動時に端末・ウィンドウ
+# タイトル・操作パネルに表示され、「いま最新版で動いているか」を判別できるようにする。
+APP_VERSION = '2026-07-16.2'
 
 # =====================================================================
 #  グラフのデザイン設定（ここを編集すれば見た目を自由に変更できます）
@@ -465,6 +470,9 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
     S = fig._fml['style'] if hasattr(fig, '_fml') else STYLE
     fig.set_size_inches(max(fig.get_figwidth(), 14), max(fig.get_figheight(), 8))
     fig.subplots_adjust(left=0.07, right=0.63, top=0.93, bottom=0.09, hspace=0.20)
+    # 版を図の右上隅に小さく表示（パネルは保存PNGより後に付くので保存画像には入らない）
+    fig.text(0.995, 0.985, 'ver ' + APP_VERSION, ha='right', va='top',
+             fontsize=8, color='#888888')
     keep = []
     fkeys = ('fx', 'fy', 'fz', 'fmag')
     mkeys = ('mx', 'my', 'mz', 'mmag')
@@ -937,6 +945,15 @@ def main():
     args = ap.parse_args()
 
     here = os.path.dirname(os.path.abspath(__file__))
+    # 版の表示（端末の先頭）。この .py 自体の更新日時も出すので、git pull で
+    # 最新に入れ替わったかがひと目で分かる（古い版なら日付・版番号が古いまま）。
+    try:
+        mtime = time.strftime('%Y-%m-%d %H:%M',
+                              time.localtime(os.path.getmtime(__file__)))
+    except OSError:
+        mtime = '?'
+    print('plot_force_log.py  version %s  （このファイル更新: %s）'
+          % (APP_VERSION, mtime))
     path = args.csv or find_latest_csv(here) or find_latest_csv(os.getcwd())
     if not path or not os.path.isfile(path):
         print('CSVが見つかりません。force_log_*.csv を作ってから実行してください。')
@@ -1073,6 +1090,13 @@ def main():
         os.path.basename(path), baseline_note, s['fmax'], s['mmax'], s['dur'])
     title = style['title'] if style.get('title') else auto_title
     fig, ax1, ax2, lines, leg = make_figure(d, s, title, contact=shade_thr, style=style)
+
+    # ウィンドウのタイトルバーに版とファイル名を出す（画面上でのみ。保存PNGには入らない）
+    try:
+        fig.canvas.manager.set_window_title(
+            'plot_force_log %s  -  %s' % (APP_VERSION, os.path.basename(path)))
+    except Exception:
+        pass
 
     # PNGは操作パネルを付ける前に保存（保存画像はパネル無しのきれいなグラフ）
     suffix = '_baselined' if args.baseline else ''
