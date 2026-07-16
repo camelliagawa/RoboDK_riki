@@ -287,6 +287,61 @@ def analyze_segments(d, thr):
     return lines, segs
 
 
+def detect_phase_split(t, F, lo_frac=0.35, hi_frac=0.65, win_s=1.0):
+    """右(HaR)と左(HaL)の境目の時刻を推定して返す。
+
+    kenma は HaR→HaL の順。境目は工程反転で力が谷になるので、中央 lo..hi の範囲で
+    平滑化した |F| が最小になる時刻を境界とみなす。データが短ければ None。
+    """
+    n = len(t)
+    if n < 10:
+        return None
+    dur = (t[-1] - t[0]) or 1.0
+    rate = n / dur
+    w = max(1, int(rate * win_s))
+    ps = [0.0] * (n + 1)
+    for i in range(n):
+        ps[i + 1] = ps[i] + F[i]
+    lo, hi = int(n * lo_frac), int(n * hi_frac)
+    best_i, best_v = lo, float('inf')
+    for i in range(lo, hi):
+        a, b = max(0, i - w), min(n, i + w)
+        v = (ps[b] - ps[a]) / (b - a)
+        if v < best_v:
+            best_v, best_i = v, i
+    return t[best_i]
+
+
+def side_summary(d, split):
+    """右(HaR: 開始～split)と左(HaL: split～終了)それぞれの |F| 統計を返す。
+
+    差引後(=各サイドが自分のゼロ基準)の d に対して使うと、左右の接触力を直接比較できる。
+    戻り値: 文字列リスト
+    """
+    t, F = d['t_s'], d['Fmag_N']
+
+    def stat(a, b):
+        v = sorted(F[i] for i in range(len(t)) if a <= t[i] < b)
+        if not v:
+            return None
+        n = len(v)
+        return (n, sum(v) / n, v[n // 2], v[int(n * 0.9)], v[-1])
+
+    right = stat(t[0], split)
+    left = stat(split, t[-1])
+    out = ['--- 左右サマリ（境界 t=%.1fs で分割）---' % split,
+           '%-10s %6s %7s %7s %7s %7s' % ('サイド', 'n', '平均', '中央', 'p90', '最大')]
+    for name, s in (('右 HaR', right), ('左 HaL', left)):
+        if s:
+            out.append('%-10s %6d %7.2f %7.2f %7.2f %7.2f' %
+                       (name, s[0], s[1], s[2], s[3], s[4]))
+        else:
+            out.append('%-10s (データ無し)' % name)
+    if right and left and right[2] > 0:
+        out.append('左/右 の中央値比 = %.2f 倍（1.0で左右均等）' % (left[2] / right[2]))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(
         description='force_log_*.csv から力/モーメントの時系列グラフを作る')
@@ -306,6 +361,10 @@ def main():
                     help='空運転の時刻ズレ補正[s]（手動。--baseline-align 併用時は初期値として無視）')
     ap.add_argument('--baseline-align', action='store_true',
                     help='空運転との時刻ズレを波形(歯)の相互相関で自動整列してから差し引く（推奨）')
+    ap.add_argument('--sides', action='store_true',
+                    help='右(HaR)/左(HaL)を自動で分けて、各サイドの|F|統計を表示（左右の接触力比較）')
+    ap.add_argument('--split', type=float, default=None,
+                    help='左右の境界時刻[s]を手動指定（省略時は自動検出）')
     args = ap.parse_args()
 
     here = os.path.dirname(os.path.abspath(__file__))
@@ -319,6 +378,12 @@ def main():
     if not d['t_s']:
         print('データ行がありません:', path)
         return 2
+
+    # 左右の境界は「差引前の生波形」で検出（HaR≈高 / HaL≈低 のコントラストが強く確実）
+    split_t = None
+    if args.sides:
+        split_t = args.split if args.split is not None else \
+            detect_phase_split(d['t_s'], list(d['Fmag_N']))
 
     baseline_note = ''
     if args.baseline:
@@ -356,6 +421,17 @@ def main():
         print()
         for ln in seg_lines:
             print(ln)
+
+    # 左右サマリ（--sides）。差引後の d を使うと左右の真の接触力を直接比較できる。
+    if args.sides:
+        print()
+        if split_t is None:
+            print('左右の境界を自動検出できませんでした（--split 秒 で手動指定してください）。')
+        else:
+            for ln in side_summary(d, split_t):
+                print(ln)
+            if not args.baseline:
+                print('※ --baseline 併用推奨: 重力を引かないと左右とも重力込みの値になります。')
 
     try:
         import matplotlib
