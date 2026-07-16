@@ -23,7 +23,7 @@ import argparse
 
 # 実行中のコードの版。機能を変えたら日付.通番を上げる。起動時に端末・ウィンドウ
 # タイトル・操作パネルに表示され、「いま最新版で動いているか」を判別できるようにする。
-APP_VERSION = '2026-07-16.5'
+APP_VERSION = '2026-07-16.6'
 
 # =====================================================================
 #  グラフのデザイン設定（ここを編集すれば見た目を自由に変更できます）
@@ -142,6 +142,18 @@ def find_latest_csv(folder):
     if not files:
         return None
     return max(files, key=_csv_recency_key)
+
+
+def _find_air_csv(dirs):
+    """与えたフォルダ群から空運転CSV（air.csv / air.csv.csv）を探して返す。無ければ None。"""
+    for base_dir in dirs:
+        if not base_dir:
+            continue
+        for cand in ('air.csv', 'air.csv.csv'):
+            p = os.path.join(base_dir, cand)
+            if os.path.isfile(p):
+                return p
+    return None
 
 
 def load_log(path):
@@ -604,12 +616,17 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
 
     grid_on = [S['show_grid']]
     has_max = getattr(ax1, '_maxann', None) is not None
+    pstate = getattr(fig, '_plotstate', {})
+    has_air = bool(pstate.get('air'))     # 空運転CSVがある時だけ Baseline トグルを出す
     elabels = ['Title', 'Legend', 'X-axis', 'Y-axis', 'Grid', 'Shade', 'Max pt']
     estate = [ax1.title.get_visible(),
               bool(ax1.get_legend() and ax1.get_legend().get_visible()),
               ax2.get_xaxis().get_visible(), ax1.get_yaxis().get_visible(),
               grid_on[0], any(p.get_visible() for p in ax1._shade_patches),
               bool(has_max and ax1._maxann.get_visible())]
+    if has_air:
+        elabels.append('Baseline')
+        estate.append(bool(pstate.get('baseline_on')))
     ax_e = fig.add_axes([0.827, 0.660, 0.150, 0.272]); ax_e.set_axis_off()
     try:
         chk_e = CheckButtons(ax_e, elabels, estate,
@@ -651,8 +668,36 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
                 v = not ax1._maxann.get_visible()
                 ax1._maxann.set_visible(v)
                 ax1._maxdot.set_visible(v)
+        elif label == 'Baseline':
+            # 空運転差引の ON/OFF。図とパネルを作り直す重い処理なので、今のクリック
+            # コールバックが終わってから実行（このパネル自身を作り直すため）。
+            _defer_baseline_toggle()
+            return
         fig.canvas.draw_idle()
     chk_e.on_clicked(on_element); keep.append(chk_e)
+
+    def _defer_baseline_toggle():
+        st = getattr(fig, '_plotstate', None)
+        if not st:
+            return
+
+        def _do():
+            render_csv(fig, st['csv'], st['style'], st['contact'],
+                       baseline_on=not st['baseline_on'], with_panel=st['with_panel'])
+        try:
+            timer = fig.canvas.new_timer(interval=10)
+
+            def _cb():
+                timer.stop()
+                try:
+                    _do()
+                except Exception as e:
+                    print('Baseline切替エラー:', e)
+            timer.add_callback(_cb)
+            fig._baseline_timer = timer   # GC防止
+            timer.start()
+        except Exception:
+            _do()   # タイマ非対応バックエンドでは即実行
 
     # =====================================================================
     #  2) View range
@@ -824,12 +869,26 @@ def _auto_title(path, s, baseline_note=''):
         os.path.basename(path), baseline_note, s['fmax'], s['mmax'], s['dur'])
 
 
-def reopen_csv(fig, path, style, contact, with_panel=True):
-    """ドロップされた CSV を検証して、既存の図に描き直す。
-    force_log 形式でなければ ValueError を送出（呼び出し側でダイアログ表示）。"""
+def render_csv(fig, path, style, contact, baseline_on=False, with_panel=True):
+    """CSV を検証して既存の図に描き直す（ドロップ・空運転差引トグルの共通処理）。
+
+    baseline_on=True かつ近くに空運転CSV(air.csv)があれば、サイド別に空運転差引してから
+    描く（重力/姿勢オフセット除去）。無効なCSVは ValueError を送出（呼び出し側でダイアログ）。
+    状態を fig._plotstate に保存し、ドロップ／トグルで再利用する。
+    """
     d = load_and_validate(path)      # 無効なら例外
+    here = os.path.dirname(os.path.abspath(__file__))
+    air = _find_air_csv([os.path.dirname(os.path.abspath(path)), here, os.getcwd(),
+                         os.path.join(here, 'samples')])
+    note, applied = '', False
+    if baseline_on and air:
+        base = load_log(air)
+        if base['t_s']:
+            for ln in apply_baseline_persides(d, base):
+                print(ln)
+            note, applied = ' [baseline-subtracted]', True
     s = summarize(d)
-    title = style['title'] if style.get('title') else _auto_title(path, s)
+    title = style['title'] if style.get('title') else _auto_title(path, s, note)
     # 旧パネルのウィジェットが canvas に残したコールバック(draw_event等)を先に外す。
     # 外さないと fig.clear() 後も古い CheckButtons 等が描画時に呼ばれてクラッシュする。
     for w in getattr(fig, '_panel_widgets', []):
@@ -839,6 +898,8 @@ def reopen_csv(fig, path, style, contact, with_panel=True):
             pass
     fig._panel_widgets = []
     make_figure(d, s, title, contact=contact, style=style, fig=fig)
+    fig._plotstate = dict(csv=path, style=style, contact=contact, air=air,
+                          baseline_on=applied, with_panel=with_panel)
     if with_panel:
         fml = fig._fml
         add_control_panel(fig, fml['ax1'], fml['ax2'], fml['lines'], fml['leg'],
@@ -849,7 +910,6 @@ def reopen_csv(fig, path, style, contact, with_panel=True):
     except Exception:
         pass
     fig.canvas.draw_idle()
-    print('ドロップで読み込み:', path)
 
 
 def _canvas_kind(fig):
@@ -1173,6 +1233,8 @@ def main():
                     help='グラフ画面に操作パネル(系列ON/OFF・範囲入力・配色ボタン)を常時表示')
     ap.add_argument('--save-split', action='store_true',
                     help='力とモーメントを別々のPNG(<名前>_force.png / _moment.png)にも保存')
+    ap.add_argument('--raw', action='store_true',
+                    help='空運転(air.csv)による自動補正を無効化して生データを表示')
     args = ap.parse_args()
 
     here = os.path.dirname(os.path.abspath(__file__))
@@ -1196,21 +1258,19 @@ def main():
     if os.path.dirname(os.path.abspath(path)) == os.path.abspath(sample_dir):
         print('※ 記録CSVが無いので同梱のサンプルを開いています:', os.path.basename(path))
 
+    # 空運転CSV(air.csv)を CSVと同じフォルダ / スクリプト / cwd / samples から探す
+    air_dirs = [os.path.dirname(os.path.abspath(path)), here, os.getcwd(), sample_dir]
+    air_found = _find_air_csv(air_dirs)
+    # 自動補正: air.csv が見つかれば既定でON（--raw で無効化。明示指定があればそれを優先）
+    if (not args.raw and not args.baseline and not args.auto_zero and air_found):
+        args.auto_baseline = True
+
     # --auto-baseline: air.csv / air.csv.csv を探して自動設定（拡張子二重も許容）
     if args.auto_baseline and not args.baseline:
-        found = None
-        for base_dir in (here, os.getcwd()):
-            for cand in ('air.csv', 'air.csv.csv'):
-                p2 = os.path.join(base_dir, cand)
-                if os.path.isfile(p2):
-                    found = p2
-                    break
-            if found:
-                break
-        if found:
-            args.baseline = found
+        if air_found:
+            args.baseline = air_found
             args.baseline_persides = True
-            print('空運転を自動検出:', found)
+            print('空運転を自動検出:', air_found, '（空運転差引ON。--raw で無効化、パネルの Baseline で切替）')
         else:
             args.auto_zero = True
             print('air.csv が見つからないので --auto-zero にフォールバックします（精度は落ちます）。')
@@ -1256,7 +1316,7 @@ def main():
             apply_baseline(d, base, shift=shift)
             print('空運転を差し引きました:', os.path.basename(args.baseline),
                   '(shift=%.2fs)' % shift)
-        baseline_note = ' [空運転差引済み]'
+        baseline_note = ' [baseline-subtracted]'
     elif args.auto_zero:
         _, split_t = auto_zero(d, split=split_t)
         baseline_note = ' [自動ゼロ済み(空運転なし)]'
@@ -1351,15 +1411,23 @@ def main():
             out = save_axes_region(fig, axes, base + '_' + sfx + '.png', style['dpi'])
             print('個別保存    :', out)
 
+    # ドロップ／Baselineトグルで再利用する状態を図に保存（空運転差引の現在ON/OFF等）
+    fig._plotstate = dict(csv=path, style=style, contact=shade_thr, air=air_found,
+                          baseline_on=bool(args.baseline), with_panel=args.panel)
+
     if not args.no_show:
         if args.panel:
             add_control_panel(fig, ax1, ax2, lines, leg,
                               save_base=base, save_dpi=style['dpi'])
 
-        # グラフ領域への CSV ドラッグ&ドロップで差し替え表示（関係ないCSVはエラー表示）
+        # グラフ領域への CSV ドラッグ&ドロップで差し替え表示（関係ないCSVはエラー表示）。
+        # 直前の空運転差引ON/OFFはドロップ後も引き継ぐ。
         def _on_drop(dropped):
             try:
-                reopen_csv(fig, dropped, style, shade_thr, with_panel=args.panel)
+                st = getattr(fig, '_plotstate', {})
+                render_csv(fig, dropped, style, shade_thr,
+                           baseline_on=st.get('baseline_on', False),
+                           with_panel=args.panel)
             except Exception as e:
                 _show_drop_error(fig, str(e))
         enable_drag_and_drop(fig, _on_drop)

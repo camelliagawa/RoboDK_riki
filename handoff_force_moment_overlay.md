@@ -146,13 +146,14 @@ FANUC ロボットで包丁の研磨（TORMEK T-8）を行う際に、**DynPick 
   - コード内なら `plot_force_log.py` 冒頭の **`STYLE` 辞書**。
   - 一時的な変更は実行時オプション: `--title` / `--xlim MIN MAX` / `--ylim-force MIN MAX` / `--ylim-moment MIN MAX` / `--figsize W H` / `--dpi`。
   - **`--panel`** … グラフ画面右に**操作パネルを常時表示**（カード状にグループ分けした刷新版）。`plot_force.bat`/`plot_sides.bat` は既定で付与。保存PNGはパネル無しのきれいな図（パネル追加前に保存）。起動中の**版**はタイトルバー／パネル右上／端末先頭に表示。パネルの内容:
-    - **Series**（系列ON/OFF・色付きチェック）/ **Elements**（Title・Legend・X-axis・Y-axis・Grid・Shade・**Max pt** の表示ON/OFF。**Shade と Max pt は既定OFF**＝クリーンな図が既定）
+    - **Series**（系列ON/OFF・色付きチェック）/ **Elements**（Title・Legend・X-axis・Y-axis・Grid・Shade・**Max pt** の表示ON/OFF。**Shade と Max pt は既定OFF**＝クリーンな図が既定。**air.csv がある時は Baseline** も並び、空運転差引のON/OFFをその場で切替）
     - **View range**（X/F/M に "min max" 入力、空でAuto）/ **Auto range** / **Colors**（Default/Vivid/Warm/Mono。**Mono を押すと成分ごとに線種(X実線/Y破線/Z点線)も自動割当**し、白黒でも区別できる報告書図をワンクリックで作れる）
     - **Line style**（**対象を選んでから**線種指定＝系列ごとに変えられる。対象 `All / X / Y / Z / |·|`（X/Y/Z は力·モーメント両方に効く）→ `Solid/Dashed/Dotted/DashDot`）。**既定線種は X=破線 / Y=点線 / Z=一点鎖線 / 合成=実線**（白黒でも成分を区別できる）
     - **Axis labels**（縦軸・横軸の**表記を自由に編集**。X(時間)/Y force/Y moment に文字を入れて Enter）
     - **Save image**（**Force / Moment を個別のクリーンな単体PNGで保存**。パネル・隣のグラフ・**タイトルは入らない**。保存結果はパネル内にも緑文字で表示）/ **Title**（タイトル文字の変更。**画面表示のみ。保存画像には入らない**）
   - **凡例**は上段・下段とも、データに重ならないよう上側に余白を自動確保して配置。
-  - **CSVのドラッグ&ドロップ**: グラフ領域に `force_log_*.csv` をドロップすると、その場で読み込み直して差し替え表示（`--panel` の内容も引き継ぐ）。force_log 形式でない/データが無いCSVは**表示を変えずエラーダイアログ**を出す。※ Qt バックエンド（Anaconda 既定）で有効。効かない場合は `set MPLBACKEND=QtAgg` で起動、または PyQt5 を導入。
+  - **CSVのドラッグ&ドロップ**: グラフ領域に `force_log_*.csv` をドロップすると、その場で読み込み直して差し替え表示（`--panel` の内容・空運転差引ON/OFFも引き継ぐ）。force_log 形式でない/データが無いCSVは**表示を変えずエラーダイアログ**を出す。※ Qt バックエンド（Anaconda 既定）で有効。効かない場合は `set MPLBACKEND=QtAgg` で起動、または PyQt5 を導入。
+  - **空運転差引の自動化**: フォルダに `air.csv`（`air.csv.csv` 可）を置くと、起動時に自動検出して**既定で空運転差引ON**（重力/姿勢オフセット除去。サイド別整列＝研磨順に依存しない）。生データを見たいときは `--raw` で起動、または実行中はパネルの **Baseline** チェックでON/OFF切替。air.csv は CSVと同じフォルダ／スクリプト／作業フォルダ／`samples/` から探す。
   - 恒久設定(STYLE/plot_config.json)の追加キー: `show_title/legend/xaxis/yaxis/grid/shade`（`show_shade` 既定False）, `annotate_max`（最大点の表示・既定False）, `force_xaxis`（力グラフにもTime[s]軸）, `ls_fx`…`ls_mmag`（系列ごとの線種。既定は破線/点線/一点鎖線/実線）。
   - 各名称の変更: `title`, `force_ylabel`, `moment_ylabel`, `xlabel`, 凡例 `label_fx`…`label_mmag`（パネルの Axis labels でも編集可。日本語にするなら `font_family` も指定）。
   - 日本語ラベルにするなら `font_family` を `"Meiryo"` 等に（Windows）。`plot_config.json` は Git管理外。
@@ -231,6 +232,7 @@ FANUC ロボットで包丁の研磨（TORMEK T-8）を行う際に、**DynPick 
 - `dynpick_calib.py` … 軸校正ツール（対話式）。
 - `calibration_guide.md` … 校正/運用の手順書。
 - `samples/force_log_20260716_161538.csv` … 動作確認・見本用のサンプルCSV（実測データ）。記録CSVが1つも無いとき `plot_force_log.py` はこれを自動で開く。
+- `samples/air.csv` … 見本用の空運転CSV。サンプルを開くと自動で空運転差引が効く（実運用では作業フォルダに `air.csv` を置く）。
 - `requirements.txt` … `pyserial`（記録）/ `matplotlib`（グラフ）。`robodk` は矢印表示時のみ。
 - `.gitignore` … `__pycache__/` `*.pyc` `force_log_*.csv` `plot_config.json`（ただし `samples/` の見本CSVは追跡）。
 - `.gitattributes` … `*.bat` を CRLF で取り出し（cmd 互換）。
