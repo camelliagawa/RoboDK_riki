@@ -143,7 +143,12 @@ FANUC ロボットで包丁の研磨（TORMEK T-8）を行う際に、**DynPick 
   - コードを触らず変えるなら **`plot_config.json`**（`plot_config.example.json` をコピーして編集、同フォルダに置く。書いた項目だけ上書き）。
   - コード内なら `plot_force_log.py` 冒頭の **`STYLE` 辞書**。
   - 一時的な変更は実行時オプション: `--title` / `--xlim MIN MAX` / `--ylim-force MIN MAX` / `--ylim-moment MIN MAX` / `--figsize W H` / `--dpi`。
-  - **`--panel`** … グラフ画面右に**操作パネルを常時表示**（系列ON/OFFチェック、範囲入力 "min max"、配色ボタン Default/Vivid/Warm/Mono、Auto range）。`plot_force.bat`/`plot_sides.bat` は既定で付与。保存PNGはパネル無しのきれいな図（パネル追加前に保存）。
+  - **`--panel`** … グラフ画面右に**操作パネルを常時表示**。`plot_force.bat`/`plot_sides.bat` は既定で付与。保存PNGはパネル無しのきれいな図（パネル追加前に保存）。パネルの内容:
+    - **Series**（系列ON/OFF・色付きチェック）/ **Elements**（Title・Legend・X-axis・Y-axis・Grid・Shade の表示ON/OFF）
+    - **Range**（X/F/M に "min max" 入力、空でAuto）/ **Auto range** / **Colors**（Default/Vivid/Warm/Mono）
+    - **Line style**（Solid/Dashed/Dotted/DashDot・全線一括）/ **Title**（タイトル文字の変更）
+  - 恒久設定(STYLE/plot_config.json)の追加キー: `show_title/legend/xaxis/yaxis/grid/shade`, `force_xaxis`（力グラフにもTime[s]軸）, `ls_fx`…`ls_mmag`（系列ごとの線種）。
+  - 各名称の変更: `title`, `force_ylabel`, `moment_ylabel`, `xlabel`, 凡例 `label_fx`…`label_mmag`（日本語にするなら `font_family` も指定）。
   - 日本語ラベルにするなら `font_family` を `"Meiryo"` 等に（Windows）。`plot_config.json` は Git管理外。
 
 ### 補助ツール（センサのみ、RoboDK不要）

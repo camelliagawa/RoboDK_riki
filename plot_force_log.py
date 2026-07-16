@@ -69,6 +69,19 @@ STYLE = {
     # --- 系列の表示ON/OFF（不要な線を消せる）---
     'show_fx': True, 'show_fy': True, 'show_fz': True, 'show_fmag': True,
     'show_mx': True, 'show_my': True, 'show_mz': True, 'show_mmag': True,
+
+    # --- 各要素の表示ON/OFF ---
+    'show_title': True,     # タイトル（キャプション）
+    'show_legend': True,    # 凡例
+    'show_xaxis': True,     # 横軸（目盛り＋ラベル）
+    'show_yaxis': True,     # 縦軸（目盛り＋ラベル）
+    'show_grid': True,      # グリッド線
+    'show_shade': True,     # 加工区間の黄色塗り
+    'force_xaxis': True,    # 力(上段)グラフにも Time[s] 目盛りを表示
+
+    # --- 線種（'-'=実線, '--'=破線, ':'=点線, '-.'=一点鎖線）系列ごとに指定可 ---
+    'ls_fx': '-', 'ls_fy': '-', 'ls_fz': '-', 'ls_fmag': '-',
+    'ls_mx': '-', 'ls_my': '-', 'ls_mz': '-', 'ls_mmag': '-',
 }
 
 
@@ -308,7 +321,8 @@ def make_figure(d, s, title, contact=None, style=None):
                ('fz', 'fz_N', 'color_z', 'label_fz', lwc),
                ('fmag', 'Fmag_N', 'color_mag', 'label_fmag', lwm))
     for key, col, ckey, lkey, lw in fseries:
-        (ln,) = ax1.plot(t, d[col], color=S[ckey], lw=lw, label=S[lkey])
+        (ln,) = ax1.plot(t, d[col], color=S[ckey], lw=lw,
+                         ls=S.get('ls_' + key, '-'), label=S[lkey])
         ln.set_visible(S['show_' + key])
         lines[key] = ln
     if S['annotate_max'] and S['show_fmag'] and s['fmax_t'] is not None:
@@ -318,7 +332,6 @@ def make_figure(d, s, title, contact=None, style=None):
                      fontsize=S['annotate_fontsize'], color=S['color_mag'])
         ax1.plot([s['fmax_t']], [s['fmax']], 'o', color=S['color_mag'], ms=5)
     ax1.set_ylabel(S['force_ylabel'])
-    ax1.grid(True, color=S['grid_color'], lw=S['grid_lw'])
     ax1.set_title(title, fontsize=S['title_fontsize'])
     if S['force_ylim_min'] is not None or S['force_ylim_max'] is not None:
         ax1.set_ylim(S['force_ylim_min'], S['force_ylim_max'])
@@ -329,14 +342,19 @@ def make_figure(d, s, title, contact=None, style=None):
                ('mz', 'mz_Nm', 'color_z', 'label_mz', lwc),
                ('mmag', 'Mmag_Nm', 'color_mag', 'label_mmag', lwm))
     for key, col, ckey, lkey, lw in mseries:
-        (ln,) = ax2.plot(t, d[col], color=S[ckey], lw=lw, label=S[lkey])
+        (ln,) = ax2.plot(t, d[col], color=S[ckey], lw=lw,
+                         ls=S.get('ls_' + key, '-'), label=S[lkey])
         ln.set_visible(S['show_' + key])
         lines[key] = ln
     ax2.set_ylabel(S['moment_ylabel'])
     ax2.set_xlabel(S['xlabel'])
-    ax2.grid(True, color=S['grid_color'], lw=S['grid_lw'])
     if S['moment_ylim_min'] is not None or S['moment_ylim_max'] is not None:
         ax2.set_ylim(S['moment_ylim_min'], S['moment_ylim_max'])
+
+    # 力(上段)にも Time[s] 軸を出す（sharexで隠れる下端目盛りを復活）
+    if S['force_xaxis']:
+        ax1.tick_params(labelbottom=True)
+        ax1.set_xlabel(S['xlabel'])
 
     _refresh_legend(ax1, lines, ('fx', 'fy', 'fz', 'fmag'), leg)
     _refresh_legend(ax2, lines, ('mx', 'my', 'mz', 'mmag'), leg)
@@ -346,12 +364,35 @@ def make_figure(d, s, title, contact=None, style=None):
         ax1.set_xlim(S['xlim_min'], S['xlim_max'])
 
     # --- 加工区間（|F|>=contact）を薄く塗る（任意）---
-    if contact is not None:
+    for ax in (ax1, ax2):
+        ax._shade_patches = []
+        if contact is not None:
+            ax._shade_patches = _shade_contact(
+                ax, t, d['Fmag_N'], contact,
+                color=S['contact_color'], alpha=S['contact_alpha'])
+            for p in ax._shade_patches:
+                p.set_visible(S['show_shade'])
+
+    # --- 各要素の表示ON/OFF（グリッド/タイトル/凡例/軸）---
+    for ax in (ax1, ax2):
+        if S['show_grid']:
+            ax.grid(True, color=S['grid_color'], lw=S['grid_lw'])
+        else:
+            ax.grid(False)
+        ax.get_yaxis().set_visible(S['show_yaxis'])
+    ax1.title.set_visible(S['show_title'])
+    # 横軸: 下段は show_xaxis、上段は show_xaxis かつ force_xaxis
+    ax2.get_xaxis().set_visible(S['show_xaxis'])
+    ax1.get_xaxis().set_visible(S['show_xaxis'] and S['force_xaxis'])
+    if not S['show_legend']:
         for ax in (ax1, ax2):
-            _shade_contact(ax, t, d['Fmag_N'], contact,
-                           color=S['contact_color'], alpha=S['contact_alpha'])
+            if ax.get_legend():
+                ax.get_legend().set_visible(False)
 
     fig.tight_layout()
+    # パネルから触れるようハンドルを図に保持
+    fig._fml = {'ax1': ax1, 'ax2': ax2, 'lines': lines, 'leg': leg,
+                'style': S, 'title_text': title}
     return fig, ax1, ax2, lines, leg
 
 
@@ -374,45 +415,101 @@ COLOR_THEMES = {
 
 
 def add_control_panel(fig, ax1, ax2, lines, leg):
-    """グラフ右側に操作パネル（系列ON/OFF・範囲入力・配色ボタン）を常時表示する。"""
+    """グラフ右側に操作パネルを常時表示する。
+    系列ON/OFF・要素ON/OFF(タイトル/凡例/軸/グリッド/塗り)・範囲入力・配色・線種・タイトル変更。
+    """
     from matplotlib.widgets import CheckButtons, TextBox, Button
 
-    fig.subplots_adjust(left=0.08, right=0.68, top=0.93, bottom=0.10, hspace=0.18)
-    keep = []   # ウィジェットがGCされないよう参照を保持
+    S = fig._fml['style'] if hasattr(fig, '_fml') else STYLE
+    fig.set_size_inches(max(fig.get_figwidth(), 14), max(fig.get_figheight(), 8))
+    fig.subplots_adjust(left=0.07, right=0.63, top=0.93, bottom=0.09, hspace=0.20)
+    keep = []
+    fkeys = ('fx', 'fy', 'fz', 'fmag')
+    mkeys = ('mx', 'my', 'mz', 'mmag')
 
+    def redraw_legends():
+        _refresh_legend(ax1, lines, fkeys, leg)
+        _refresh_legend(ax2, lines, mkeys, leg)
+
+    def txt(rect, s, size=9):
+        a = fig.add_axes(rect); a.axis('off'); a.text(0, 0.2, s, fontsize=size)
+
+    # --- 系列ON/OFF（左カラム）---
     order = [('fx', 'Fx'), ('fy', 'Fy'), ('fz', 'Fz'), ('fmag', '|F|'),
              ('mx', 'Mx'), ('my', 'My'), ('mz', 'Mz'), ('mmag', '|M|')]
-    labels = [lb for _, lb in order]
-
-    # --- 系列ON/OFF ---
-    ax_chk = fig.add_axes([0.72, 0.50, 0.26, 0.43])
-    ax_chk.set_title('Series  (box=ON / empty=OFF)', fontsize=9)
-    actives = [lines[k].get_visible() for k, _ in order]
-    chk_colors = [lines[k].get_color() for k, _ in order]
+    slabels = [lb for _, lb in order]
+    ax_s = fig.add_axes([0.655, 0.58, 0.15, 0.37])
+    ax_s.set_title('Series', fontsize=9)
+    scolors = [lines[k].get_color() for k, _ in order]
     try:
-        # matplotlib 3.7+ : 枠付き・系列色で見やすく（□=OFF / ⊠=ON）
-        chk = CheckButtons(
-            ax_chk, labels, actives,
-            frame_props={'s': 120, 'facecolor': 'white',
-                         'edgecolor': '#999999', 'linewidth': 1.2},
-            check_props={'s': 120, 'facecolor': chk_colors},
-            label_props={'color': chk_colors})
+        chk_s = CheckButtons(ax_s, slabels, [lines[k].get_visible() for k, _ in order],
+                             frame_props={'s': 90, 'facecolor': 'white',
+                                          'edgecolor': '#999999', 'linewidth': 1.1},
+                             check_props={'s': 90, 'facecolor': scolors},
+                             label_props={'color': scolors})
     except TypeError:
-        chk = CheckButtons(ax_chk, labels, actives)   # 古い版はそのまま
+        chk_s = CheckButtons(ax_s, slabels, [lines[k].get_visible() for k, _ in order])
 
-    def on_check(label):
-        k = order[labels.index(label)][0]
+    def on_series(label):
+        k = order[slabels.index(label)][0]
         lines[k].set_visible(not lines[k].get_visible())
-        _refresh_legend(ax1, lines, ('fx', 'fy', 'fz', 'fmag'), leg)
-        _refresh_legend(ax2, lines, ('mx', 'my', 'mz', 'mmag'), leg)
-        fig.canvas.draw_idle()
-    chk.on_clicked(on_check)
-    keep.append(chk)
+        redraw_legends(); fig.canvas.draw_idle()
+    chk_s.on_clicked(on_series)
+    keep.append(chk_s)
 
-    # --- 範囲入力（"min max" を空白区切りで。空でオート）---
+    # --- 要素ON/OFF（右カラム）---
+    grid_on = [S['show_grid']]
+    elabels = ['Title', 'Legend', 'X-axis', 'Y-axis', 'Grid', 'Shade']
+    estate = [ax1.title.get_visible(),
+              bool(ax1.get_legend() and ax1.get_legend().get_visible()),
+              ax2.get_xaxis().get_visible(), ax1.get_yaxis().get_visible(),
+              grid_on[0], any(p.get_visible() for p in ax1._shade_patches)]
+    ax_e = fig.add_axes([0.82, 0.58, 0.17, 0.37])
+    ax_e.set_title('Elements', fontsize=9)
+    try:
+        chk_e = CheckButtons(ax_e, elabels, estate,
+                             frame_props={'s': 90, 'facecolor': 'white',
+                                          'edgecolor': '#999999', 'linewidth': 1.1},
+                             check_props={'s': 90, 'facecolor': '#444444'})
+    except TypeError:
+        chk_e = CheckButtons(ax_e, elabels, estate)
+
+    def on_element(label):
+        if label == 'Title':
+            ax1.title.set_visible(not ax1.title.get_visible())
+        elif label == 'Legend':
+            for ax in (ax1, ax2):
+                lg = ax.get_legend()
+                if lg:
+                    lg.set_visible(not lg.get_visible())
+        elif label == 'X-axis':
+            v = not ax2.get_xaxis().get_visible()
+            ax2.get_xaxis().set_visible(v)
+            ax1.get_xaxis().set_visible(v and S['force_xaxis'])
+        elif label == 'Y-axis':
+            v = not ax1.get_yaxis().get_visible()
+            for ax in (ax1, ax2):
+                ax.get_yaxis().set_visible(v)
+        elif label == 'Grid':
+            grid_on[0] = not grid_on[0]
+            for ax in (ax1, ax2):
+                if grid_on[0]:
+                    ax.grid(True, color=S['grid_color'], lw=S['grid_lw'])
+                else:
+                    ax.grid(False)
+        elif label == 'Shade':
+            for ax in (ax1, ax2):
+                for p in ax._shade_patches:
+                    p.set_visible(not p.get_visible())
+        fig.canvas.draw_idle()
+    chk_e.on_clicked(on_element)
+    keep.append(chk_e)
+
+    # --- 範囲入力（"min max"、空でオート）---
+    txt([0.655, 0.545, 0.34, 0.03], 'Range  "min max"  (Enter; empty=Auto)', 8)
+
     def make_range_box(y, label, ax_target, axis):
-        ax_tb = fig.add_axes([0.80, y, 0.16, 0.045])
-        tb = TextBox(ax_tb, label, initial='')
+        tb = TextBox(fig.add_axes([0.735, y, 0.20, 0.04]), label, initial='')
 
         def submit(text):
             text = text.strip()
@@ -421,71 +518,77 @@ def add_control_panel(fig, ax1, ax2, lines, leg):
                     ax_target.autoscale(axis=axis)
                 else:
                     a, b = text.replace(',', ' ').split()
-                    if axis == 'x':
-                        ax_target.set_xlim(float(a), float(b))
-                    else:
-                        ax_target.set_ylim(float(a), float(b))
+                    (ax_target.set_xlim if axis == 'x' else ax_target.set_ylim)(float(a), float(b))
                 fig.canvas.draw_idle()
             except Exception:
                 pass
-        tb.on_submit(submit)
-        keep.append(tb)
-
-    ax_lbl = fig.add_axes([0.72, 0.44, 0.26, 0.03]); ax_lbl.axis('off')
-    ax_lbl.text(0, 0, 'Range  "min max"  (Enter; empty=Auto)', fontsize=8)
-    make_range_box(0.375, 'X [s]', ax1, 'x')       # x は共有なので ax1 に設定
-    make_range_box(0.315, 'F [N]', ax1, 'y')
-    make_range_box(0.255, 'M[Nm]', ax2, 'y')
-
-    # --- オート（全部自動範囲に戻す）---
-    ax_auto = fig.add_axes([0.80, 0.195, 0.16, 0.05])
-    btn_auto = Button(ax_auto, 'Auto range')
+        tb.on_submit(submit); keep.append(tb)
+    make_range_box(0.495, 'X [s]', ax1, 'x')
+    make_range_box(0.445, 'F [N]', ax1, 'y')
+    make_range_box(0.395, 'M[Nm]', ax2, 'y')
+    btn_auto = Button(fig.add_axes([0.735, 0.340, 0.20, 0.045]), 'Auto range')
 
     def on_auto(_):
         for ax in (ax1, ax2):
-            ax.relim()
-            ax.autoscale()
+            ax.relim(); ax.autoscale()
         fig.canvas.draw_idle()
-    btn_auto.on_clicked(on_auto)
-    keep.append(btn_auto)
+    btn_auto.on_clicked(on_auto); keep.append(btn_auto)
 
-    # --- 配色テーマ（色ボタン）---
-    ax_ct = fig.add_axes([0.72, 0.135, 0.26, 0.03]); ax_ct.axis('off')
-    ax_ct.text(0, 0, 'Colors', fontsize=9)
-    theme_names = list(COLOR_THEMES.keys())
-    for i, name in enumerate(theme_names):
-        bx = 0.72 + (i % 2) * 0.135
-        by = 0.075 - (i // 2) * 0.055
-        ax_b = fig.add_axes([bx, by, 0.125, 0.045])
+    # --- 配色テーマ ---
+    txt([0.655, 0.300, 0.2, 0.03], 'Colors', 9)
+    for i, name in enumerate(COLOR_THEMES):
+        ax_b = fig.add_axes([0.655 + (i % 2) * 0.175, 0.245 - (i // 2) * 0.052, 0.16, 0.042])
         b = Button(ax_b, name)
 
-        def on_theme(_evt, nm=name):
+        def on_theme(_e, nm=name):
             cx, cy, cz, cm = COLOR_THEMES[nm]
-            for k, col in (('fx', cx), ('fy', cy), ('fz', cz), ('fmag', cm),
-                           ('mx', cx), ('my', cy), ('mz', cz), ('mmag', cm)):
-                lines[k].set_color(col)
-            _refresh_legend(ax1, lines, ('fx', 'fy', 'fz', 'fmag'), leg)
-            _refresh_legend(ax2, lines, ('mx', 'my', 'mz', 'mmag'), leg)
-            fig.canvas.draw_idle()
-        b.on_clicked(on_theme)
-        keep.append(b)
+            for k, c in (('fx', cx), ('fy', cy), ('fz', cz), ('fmag', cm),
+                         ('mx', cx), ('my', cy), ('mz', cz), ('mmag', cm)):
+                lines[k].set_color(c)
+            redraw_legends(); fig.canvas.draw_idle()
+        b.on_clicked(on_theme); keep.append(b)
 
-    fig._panel_widgets = keep   # GC防止に図へぶら下げる
+    # --- 線種（全線・1行4ボタン）---
+    txt([0.655, 0.128, 0.2, 0.03], 'Line style (all lines)', 9)
+    styles = [('Solid', '-'), ('Dashed', '--'), ('Dotted', ':'), ('DashDot', '-.')]
+    for i, (nm, ch) in enumerate(styles):
+        ax_b = fig.add_axes([0.655 + i * 0.086, 0.078, 0.078, 0.042])
+        b = Button(ax_b, nm, hovercolor='#c8e0ff')
+
+        def on_ls(_e, c=ch):
+            for k in lines:
+                lines[k].set_linestyle(c)
+            redraw_legends(); fig.canvas.draw_idle()
+        b.on_clicked(on_ls); keep.append(b)
+
+    # --- タイトル文字の変更 ---
+    tb_title = TextBox(fig.add_axes([0.720, 0.018, 0.270, 0.038]), 'Title',
+                       initial=fig._fml.get('title_text', '') if hasattr(fig, '_fml') else '')
+
+    def on_title(text):
+        ax1.set_title(text, fontsize=S['title_fontsize'])
+        ax1.title.set_visible(True)
+        fig.canvas.draw_idle()
+    tb_title.on_submit(on_title); keep.append(tb_title)
+
+    fig._panel_widgets = keep
     return keep
 
 
 def _shade_contact(ax, t, fmag, thr, color='#F0C000', alpha=0.12):
-    """|F|>=thr の連続区間を軽く塗る。"""
+    """|F|>=thr の連続区間を軽く塗る。塗ったパッチのリストを返す（表示ON/OFF用）。"""
+    patches = []
     start = None
     for i in range(len(t)):
         on = fmag[i] >= thr
         if on and start is None:
             start = t[i]
         elif not on and start is not None:
-            ax.axvspan(start, t[i], color=color, alpha=alpha)
+            patches.append(ax.axvspan(start, t[i], color=color, alpha=alpha))
             start = None
     if start is not None:
-        ax.axvspan(start, t[-1], color=color, alpha=alpha)
+        patches.append(ax.axvspan(start, t[-1], color=color, alpha=alpha))
+    return patches
 
 
 def _median(values):

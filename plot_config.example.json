@@ -36,5 +36,11 @@
   "annotate_fontsize": 9,
 
   "show_fx": true, "show_fy": true, "show_fz": true, "show_fmag": true,
-  "show_mx": true, "show_my": true, "show_mz": true, "show_mmag": true
+  "show_mx": true, "show_my": true, "show_mz": true, "show_mmag": true,
+
+  "show_title": true, "show_legend": true, "show_xaxis": true,
+  "show_yaxis": true, "show_grid": true, "show_shade": true, "force_xaxis": true,
+
+  "ls_fx": "-", "ls_fy": "-", "ls_fz": "-", "ls_fmag": "-",
+  "ls_mx": "-", "ls_my": "-", "ls_mz": "-", "ls_mmag": "-"
 }
