@@ -386,8 +386,19 @@ def add_control_panel(fig, ax1, ax2, lines, leg):
 
     # --- 系列ON/OFF ---
     ax_chk = fig.add_axes([0.72, 0.50, 0.26, 0.43])
-    ax_chk.set_title('Series (show/hide)', fontsize=9)
-    chk = CheckButtons(ax_chk, labels, [lines[k].get_visible() for k, _ in order])
+    ax_chk.set_title('Series  (box=ON / empty=OFF)', fontsize=9)
+    actives = [lines[k].get_visible() for k, _ in order]
+    chk_colors = [lines[k].get_color() for k, _ in order]
+    try:
+        # matplotlib 3.7+ : 枠付き・系列色で見やすく（□=OFF / ⊠=ON）
+        chk = CheckButtons(
+            ax_chk, labels, actives,
+            frame_props={'s': 120, 'facecolor': 'white',
+                         'edgecolor': '#999999', 'linewidth': 1.2},
+            check_props={'s': 120, 'facecolor': chk_colors},
+            label_props={'color': chk_colors})
+    except TypeError:
+        chk = CheckButtons(ax_chk, labels, actives)   # 古い版はそのまま
 
     def on_check(label):
         k = order[labels.index(label)][0]
