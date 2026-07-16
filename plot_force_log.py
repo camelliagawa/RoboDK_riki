@@ -325,12 +325,18 @@ def make_figure(d, s, title, contact=None, style=None):
                          ls=S.get('ls_' + key, '-'), label=S[lkey])
         ln.set_visible(S['show_' + key])
         lines[key] = ln
-    if S['annotate_max'] and S['show_fmag'] and s['fmax_t'] is not None:
-        ax1.annotate('max |F| = %.1f N' % s['fmax'],
-                     xy=(s['fmax_t'], s['fmax']),
-                     xytext=(8, -14), textcoords='offset points',
-                     fontsize=S['annotate_fontsize'], color=S['color_mag'])
-        ax1.plot([s['fmax_t']], [s['fmax']], 'o', color=S['color_mag'], ms=5)
+    # 最大点の注釈・マーカー（後からON/OFFできるよう常に生成し可視だけ制御）
+    ax1._maxann = ax1._maxdot = None
+    if s['fmax_t'] is not None:
+        ax1._maxann = ax1.annotate('max |F| = %.1f N' % s['fmax'],
+                                   xy=(s['fmax_t'], s['fmax']),
+                                   xytext=(8, -14), textcoords='offset points',
+                                   fontsize=S['annotate_fontsize'], color=S['color_mag'])
+        (ax1._maxdot,) = ax1.plot([s['fmax_t']], [s['fmax']], 'o',
+                                  color=S['color_mag'], ms=5)
+        vis = S['annotate_max'] and S['show_fmag']
+        ax1._maxann.set_visible(vis)
+        ax1._maxdot.set_visible(vis)
     ax1.set_ylabel(S['force_ylabel'])
     ax1.set_title(title, fontsize=S['title_fontsize'])
     if S['force_ylim_min'] is not None or S['force_ylim_max'] is not None:
@@ -396,6 +402,19 @@ def make_figure(d, s, title, contact=None, style=None):
     return fig, ax1, ax2, lines, leg
 
 
+def save_axes_region(fig, axes_list, out_path, dpi):
+    """図の中の指定axes（と付随ラベル/凡例）だけを切り出してPNG保存する。
+    現在の見た目（色・表示ON/OFF・範囲など操作パネルでの変更）を反映する。"""
+    from matplotlib.transforms import Bbox
+    fig.canvas.draw()
+    r = fig.canvas.get_renderer()
+    bb = Bbox.union([ax.get_tightbbox(r) for ax in axes_list])
+    ext = bb.transformed(fig.dpi_scale_trans.inverted())
+    ext = ext.padded(0.12)   # 各辺に約0.12インチだけ余白（隣のグラフを巻き込まない）
+    fig.savefig(out_path, bbox_inches=ext, dpi=dpi)
+    return out_path
+
+
 def _refresh_legend(ax, lines, keys, leg_kwargs):
     """可視な線だけで凡例を作り直す（系列ON/OFFに追従させるため）。"""
     handles = [lines[k] for k in keys if lines[k].get_visible()]
@@ -414,9 +433,10 @@ COLOR_THEMES = {
 }
 
 
-def add_control_panel(fig, ax1, ax2, lines, leg):
+def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
     """グラフ右側に操作パネルを常時表示する。
-    系列ON/OFF・要素ON/OFF(タイトル/凡例/軸/グリッド/塗り)・範囲入力・配色・線種・タイトル変更。
+    系列ON/OFF・要素ON/OFF(タイトル/凡例/軸/グリッド/塗り/最大点)・範囲入力・配色・線種・
+    力/モーメントの個別保存・タイトル変更。
     """
     from matplotlib.widgets import CheckButtons, TextBox, Button
 
@@ -459,11 +479,13 @@ def add_control_panel(fig, ax1, ax2, lines, leg):
 
     # --- 要素ON/OFF（右カラム）---
     grid_on = [S['show_grid']]
-    elabels = ['Title', 'Legend', 'X-axis', 'Y-axis', 'Grid', 'Shade']
+    has_max = getattr(ax1, '_maxann', None) is not None
+    elabels = ['Title', 'Legend', 'X-axis', 'Y-axis', 'Grid', 'Shade', 'Max pt']
     estate = [ax1.title.get_visible(),
               bool(ax1.get_legend() and ax1.get_legend().get_visible()),
               ax2.get_xaxis().get_visible(), ax1.get_yaxis().get_visible(),
-              grid_on[0], any(p.get_visible() for p in ax1._shade_patches)]
+              grid_on[0], any(p.get_visible() for p in ax1._shade_patches),
+              bool(has_max and ax1._maxann.get_visible())]
     ax_e = fig.add_axes([0.82, 0.58, 0.17, 0.37])
     ax_e.set_title('Elements', fontsize=9)
     try:
@@ -501,6 +523,11 @@ def add_control_panel(fig, ax1, ax2, lines, leg):
             for ax in (ax1, ax2):
                 for p in ax._shade_patches:
                     p.set_visible(not p.get_visible())
+        elif label == 'Max pt':
+            if getattr(ax1, '_maxann', None) is not None:
+                v = not ax1._maxann.get_visible()
+                ax1._maxann.set_visible(v)
+                ax1._maxdot.set_visible(v)
         fig.canvas.draw_idle()
     chk_e.on_clicked(on_element)
     keep.append(chk_e)
@@ -534,35 +561,56 @@ def add_control_panel(fig, ax1, ax2, lines, leg):
         fig.canvas.draw_idle()
     btn_auto.on_clicked(on_auto); keep.append(btn_auto)
 
-    # --- 配色テーマ ---
-    txt([0.655, 0.300, 0.2, 0.03], 'Colors', 9)
-    for i, name in enumerate(COLOR_THEMES):
-        ax_b = fig.add_axes([0.655 + (i % 2) * 0.175, 0.245 - (i // 2) * 0.052, 0.16, 0.042])
-        b = Button(ax_b, name)
+    # 1行N個のボタンを x=0.655..0.99 に等間隔で並べる小ヘルパ
+    def button_row(y, items, make_cb, hover=None):
+        n = len(items); gap = 0.008; w = (0.335 - (n - 1) * gap) / n
+        for i, (label, val) in enumerate(items):
+            b = Button(fig.add_axes([0.655 + i * (w + gap), y, w, 0.042]),
+                       label, hovercolor=hover or '0.85')
+            b.on_clicked(make_cb(val)); keep.append(b)
 
-        def on_theme(_e, nm=name):
+    # --- 配色テーマ（1行4）---
+    txt([0.655, 0.305, 0.2, 0.025], 'Colors', 9)
+
+    def theme_cb(nm):
+        def f(_e):
             cx, cy, cz, cm = COLOR_THEMES[nm]
             for k, c in (('fx', cx), ('fy', cy), ('fz', cz), ('fmag', cm),
                          ('mx', cx), ('my', cy), ('mz', cz), ('mmag', cm)):
                 lines[k].set_color(c)
             redraw_legends(); fig.canvas.draw_idle()
-        b.on_clicked(on_theme); keep.append(b)
+        return f
+    button_row(0.258, [(n, n) for n in COLOR_THEMES], theme_cb)
 
-    # --- 線種（全線・1行4ボタン）---
-    txt([0.655, 0.128, 0.2, 0.03], 'Line style (all lines)', 9)
-    styles = [('Solid', '-'), ('Dashed', '--'), ('Dotted', ':'), ('DashDot', '-.')]
-    for i, (nm, ch) in enumerate(styles):
-        ax_b = fig.add_axes([0.655 + i * 0.086, 0.078, 0.078, 0.042])
-        b = Button(ax_b, nm, hovercolor='#c8e0ff')
+    # --- 力/モーメントの個別保存（1行3）---
+    txt([0.655, 0.212, 0.3, 0.025], 'Save image', 9)
 
-        def on_ls(_e, c=ch):
+    def save_cb(which):
+        def f(_e):
+            if not save_base:
+                return
+            axes = {'f': [ax1], 'm': [ax2], 'b': [ax1, ax2]}[which]
+            suffix = {'f': 'force', 'm': 'moment', 'b': 'both'}[which]
+            out = save_axes_region(fig, axes, save_base + '_' + suffix + '.png', save_dpi)
+            print('保存:', out)
+        return f
+    button_row(0.165, [('Force', 'f'), ('Moment', 'm'), ('Both', 'b')], save_cb,
+               hover='#bfe3bf')
+
+    # --- 線種（全線・1行4）---
+    txt([0.655, 0.119, 0.2, 0.025], 'Line style (all lines)', 9)
+
+    def ls_cb(ch):
+        def f(_e):
             for k in lines:
-                lines[k].set_linestyle(c)
+                lines[k].set_linestyle(ch)
             redraw_legends(); fig.canvas.draw_idle()
-        b.on_clicked(on_ls); keep.append(b)
+        return f
+    button_row(0.072, [('Solid', '-'), ('Dashed', '--'),
+                       ('Dotted', ':'), ('DashDot', '-.')], ls_cb, hover='#c8e0ff')
 
     # --- タイトル文字の変更 ---
-    tb_title = TextBox(fig.add_axes([0.720, 0.018, 0.270, 0.038]), 'Title',
+    tb_title = TextBox(fig.add_axes([0.720, 0.020, 0.270, 0.038]), 'Title',
                        initial=fig._fml.get('title_text', '') if hasattr(fig, '_fml') else '')
 
     def on_title(text):
@@ -814,6 +862,8 @@ def main():
     ap.add_argument('--dpi', type=float, help='PNG保存の解像度 例: --dpi 150')
     ap.add_argument('--panel', action='store_true',
                     help='グラフ画面に操作パネル(系列ON/OFF・範囲入力・配色ボタン)を常時表示')
+    ap.add_argument('--save-split', action='store_true',
+                    help='力とモーメントを別々のPNG(<名前>_force.png / _moment.png)にも保存')
     args = ap.parse_args()
 
     here = os.path.dirname(os.path.abspath(__file__))
@@ -956,13 +1006,21 @@ def main():
 
     # PNGは操作パネルを付ける前に保存（保存画像はパネル無しのきれいなグラフ）
     suffix = '_baselined' if args.baseline else ''
-    png = os.path.splitext(path)[0] + suffix + '.png'
+    base = os.path.splitext(path)[0] + suffix
+    png = base + '.png'
     fig.savefig(png, dpi=style['dpi'])
     print('グラフを保存 :', png)
 
+    # 力/モーメントを別々のPNGにも保存（--save-split）
+    if args.save_split:
+        for axes, sfx in (([ax1], 'force'), ([ax2], 'moment')):
+            out = save_axes_region(fig, axes, base + '_' + sfx + '.png', style['dpi'])
+            print('個別保存    :', out)
+
     if not args.no_show:
         if args.panel:
-            add_control_panel(fig, ax1, ax2, lines, leg)
+            add_control_panel(fig, ax1, ax2, lines, leg,
+                              save_base=base, save_dpi=style['dpi'])
         plt.show()
     return 0
 
