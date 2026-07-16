@@ -139,6 +139,62 @@ def apply_baseline(d, base, shift=0.0):
     return d
 
 
+def apply_baseline_persides(d, base):
+    """研磨(d)と空運転(base)を「右姿勢/左姿勢のブロック」に分け、サイドごとに整列して差し引く。
+
+    重力は姿勢だけで決まり、空運転には右姿勢・左姿勢の両ブロックが入っている。各ブロックを
+    姿勢（=重力|F|レベル: 高い方=HaR右, 低い方=HaL左）で対応づけ、ブロック内の歯パターンで
+    個別整列して引く。**研磨の順番(右先/左先)を変えても、同じ空運転1本で差し引ける。**
+    境界検出に失敗したら全体整列にフォールバック。戻り値: 診断文字列リスト。
+    """
+    comps = ('fx_N', 'fy_N', 'fz_N', 'mx_Nm', 'my_Nm', 'mz_Nm', 'Fmag_N', 'Mmag_Nm')
+    tg, ta = d['t_s'], base['t_s']
+    sg = detect_phase_split(tg, list(d['Fmag_N']))
+    sa = detect_phase_split(ta, list(base['Fmag_N']))
+    if sg is None or sa is None:
+        s, c = estimate_baseline_shift(d, base)
+        apply_baseline(d, base, shift=s)
+        return ['サイド別整列に失敗→全体整列で差引 (shift=%.2fs, corr=%.3f)' % (s, c)]
+
+    def idx_at(t, val):
+        for i in range(len(t)):
+            if t[i] >= val:
+                return i
+        return len(t)
+
+    gi, ai = idx_at(tg, sg), idx_at(ta, sa)
+    gblocks = {'1': (0, gi), '2': (gi, len(tg))}
+    ablocks = {'1': (0, ai), '2': (ai, len(ta))}
+
+    def med(d_, a, b):
+        v = sorted(d_['Fmag_N'][a:b])
+        return v[len(v) // 2] if v else 0.0
+
+    # 重力|F|レベルが高いブロック=右(HaR), 低い方=左(HaL) と姿勢で判定
+    def label(d_, blocks):
+        m1, m2 = med(d_, *blocks['1']), med(d_, *blocks['2'])
+        return {'R': blocks['1'], 'L': blocks['2']} if m1 >= m2 \
+            else {'R': blocks['2'], 'L': blocks['1']}
+
+    gl, al = label(d, gblocks), label(base, ablocks)
+    out = ['サイド別に整列して差引（順番非依存）:']
+    for side, jp in (('R', '右 HaR'), ('L', '左 HaL')):
+        ga, gb = gl[side]
+        aa, ab = al[side]
+        # ブロックを時刻0起点に揃えてから整列（絶対時刻が離れていてもマッチ可能に）
+        g0, a0 = tg[ga], ta[aa]
+        gsub = {k: (d[k][ga:gb] if k != 't_s' else [x - g0 for x in tg[ga:gb]])
+                for k in d}
+        asub = {k: (base[k][aa:ab] if k != 't_s' else [x - a0 for x in ta[aa:ab]])
+                for k in base}
+        sh, c = estimate_baseline_shift(gsub, asub)
+        apply_baseline(gsub, asub, shift=sh)
+        for k in comps:
+            d[k][ga:gb] = gsub[k]
+        out.append('  %s: shift %.2fs  corr %.3f' % (jp, sh, c))
+    return out
+
+
 def _argmax(values):
     """最大値のインデックスと値を返す。空なら (None, None)。"""
     if not values:
@@ -312,10 +368,11 @@ def detect_phase_split(t, F, lo_frac=0.35, hi_frac=0.65, win_s=1.0):
     return t[best_i]
 
 
-def side_summary(d, split):
-    """右(HaR: 開始～split)と左(HaL: split～終了)それぞれの |F| 統計を返す。
+def side_summary(d, split, right_first=True):
+    """境界 split で2分割し、右(HaR)/左(HaL)それぞれの |F| 統計を返す。
 
     差引後(=各サイドが自分のゼロ基準)の d に対して使うと、左右の接触力を直接比較できる。
+    right_first=False のとき（研磨の順番を左先に変えた場合）は前後のラベルを入れ替える。
     戻り値: 文字列リスト
     """
     t, F = d['t_s'], d['Fmag_N']
@@ -328,8 +385,9 @@ def side_summary(d, split):
         n = len(v)
         return (n, sum(v) / n, v[n // 2], v[int(n * 0.9)], v[-1])
 
-    right = stat(t[0], split)
-    left = stat(split, t[-1])
+    first = stat(t[0], split)
+    second = stat(split, t[-1])
+    right, left = (first, second) if right_first else (second, first)
     out = ['--- 左右サマリ（境界 t=%.1fs で分割）---' % split,
            '%-10s %6s %7s %7s %7s %7s' % ('サイド', 'n', '平均', '中央', 'p90', '最大')]
     for name, s in (('右 HaR', right), ('左 HaL', left)):
@@ -417,6 +475,8 @@ def main():
                     help='空運転の時刻ズレ補正[s]（手動。--baseline-align 併用時は初期値として無視）')
     ap.add_argument('--baseline-align', action='store_true',
                     help='空運転との時刻ズレを波形(歯)の相互相関で自動整列してから差し引く（推奨）')
+    ap.add_argument('--baseline-persides', action='store_true',
+                    help='空運転を右/左の姿勢ブロックに分けてサイドごとに整列して差引（研磨の順番を変えても同じ空運転1本でOK）')
     ap.add_argument('--sides', action='store_true',
                     help='右(HaR)/左(HaL)を自動で分けて、各サイドの|F|統計を表示（左右の接触力比較）')
     ap.add_argument('--split', type=float, default=None,
@@ -439,9 +499,15 @@ def main():
 
     # 左右の境界は「差引前の生波形」で検出（HaR≈高 / HaL≈低 のコントラストが強く確実）
     split_t = None
+    right_first = True
     if args.sides:
         split_t = args.split if args.split is not None else \
             detect_phase_split(d['t_s'], list(d['Fmag_N']))
+        if split_t is not None:
+            # 生の重力レベルが高いブロック=右(HaR)。順番を左先に変えても正しくラベルするため。
+            fr = [d['Fmag_N'][i] for i in range(len(d['t_s'])) if d['t_s'][i] < split_t]
+            fl = [d['Fmag_N'][i] for i in range(len(d['t_s'])) if d['t_s'][i] >= split_t]
+            right_first = _median(fr) >= _median(fl)
 
     baseline_note = ''
     if args.baseline:
@@ -452,17 +518,21 @@ def main():
         if not base['t_s']:
             print('空運転CSVにデータがありません:', args.baseline)
             return 2
-        shift = args.baseline_shift
-        if args.baseline_align:
-            shift, corr = estimate_baseline_shift(d, base)
-            print('自動整列: 時刻シフト %.2f s（波形相関 %.3f）' % (shift, corr))
-            if corr < 0.5:
-                print('  ※ 相関が低いです。開始タイミングが大きく違う/別プログラムの可能性。'
-                      '--baseline-shift で手動調整も可。')
-        apply_baseline(d, base, shift=shift)
+        if args.baseline_persides:
+            for ln in apply_baseline_persides(d, base):
+                print(ln)
+        else:
+            shift = args.baseline_shift
+            if args.baseline_align:
+                shift, corr = estimate_baseline_shift(d, base)
+                print('自動整列: 時刻シフト %.2f s（波形相関 %.3f）' % (shift, corr))
+                if corr < 0.5:
+                    print('  ※ 相関が低いです。開始タイミングが大きく違う/別プログラムの可能性。'
+                          '--baseline-shift で手動調整も可。')
+            apply_baseline(d, base, shift=shift)
+            print('空運転を差し引きました:', os.path.basename(args.baseline),
+                  '(shift=%.2fs)' % shift)
         baseline_note = ' [空運転差引済み]'
-        print('空運転を差し引きました:', os.path.basename(args.baseline),
-              '(shift=%.2fs)' % shift)
     elif args.auto_zero:
         _, split_t = auto_zero(d, split=split_t)
         baseline_note = ' [自動ゼロ済み(空運転なし)]'
@@ -492,7 +562,9 @@ def main():
         if split_t is None:
             print('左右の境界を自動検出できませんでした（--split 秒 で手動指定してください）。')
         else:
-            for ln in side_summary(d, split_t):
+            if not right_first:
+                print('（研磨順が左先と判定：ラベルを左右入れ替えて表示）')
+            for ln in side_summary(d, split_t, right_first=right_first):
                 print(ln)
             if not args.baseline and not args.auto_zero:
                 print('※ 重力未除去です。--baseline 空運転.csv（正確）か --auto-zero（簡易）を併用してください。')
