@@ -76,6 +76,50 @@ def _interp(x, xs, ys):
     return ys[lo] + r * (ys[hi] - ys[lo])
 
 
+def _pearson(a, b):
+    """2系列の相関係数（-1..1）。分散0なら0。"""
+    n = len(a)
+    if n < 2:
+        return 0.0
+    ma = sum(a) / n
+    mb = sum(b) / n
+    va = sum((x - ma) ** 2 for x in a)
+    vb = sum((y - mb) ** 2 for y in b)
+    if va <= 0 or vb <= 0:
+        return 0.0
+    cov = sum((a[i] - ma) * (b[i] - mb) for i in range(n))
+    return cov / (va ** 0.5 * vb ** 0.5)
+
+
+def estimate_baseline_shift(d, base, max_lag=20.0, step=0.1):
+    """研磨(d)と空運転(base)の |F| 波形が最もそろう時間シフト s を推定して返す。
+
+    LSが同一なら動作は同尺で、記録開始ボタンのタイミングだけずれる。そのズレを、
+    姿勢プラトー＋パスの山（歯）の共通パターンで相互相関（相関係数最大）して求める。
+    返り値 s は apply_baseline(d, base, shift=s) にそのまま渡せる（base側を s 進めて d に合わせる）。
+    戻り値: (s, corr)
+    """
+    td, yd = d['t_s'], d['Fmag_N']
+    tb, yb = base['t_s'], base['Fmag_N']
+    if len(td) < 2 or len(tb) < 2:
+        return 0.0, 0.0
+    n = int((td[-1] - td[0]) / step)
+    grid = [td[0] + i * step for i in range(n + 1)]
+    fd = [_interp(g, td, yd) for g in grid]
+    best_s, best_c = 0.0, -2.0
+    s = -max_lag
+    while s <= max_lag + 1e-9:
+        idx = [i for i, g in enumerate(grid) if tb[0] <= g + s <= tb[-1]]
+        if len(idx) > 50:
+            a = [fd[i] for i in idx]
+            b = [_interp(grid[i] + s, tb, yb) for i in idx]
+            c = _pearson(a, b)
+            if c > best_c:
+                best_c, best_s = c, s
+        s += step
+    return best_s, best_c
+
+
 def apply_baseline(d, base, shift=0.0):
     """空運転(base)の各成分を時刻で補間して d から差し引き、重力/姿勢オフセットを除去する。
 
@@ -259,7 +303,9 @@ def main():
     ap.add_argument('--baseline', metavar='AIR_CSV',
                     help='空運転CSVを時刻で差し引き、重力/姿勢オフセットを除去して表示')
     ap.add_argument('--baseline-shift', type=float, default=0.0,
-                    help='空運転の時刻ズレ補正[s]（両者の開始点が合わないとき）')
+                    help='空運転の時刻ズレ補正[s]（手動。--baseline-align 併用時は初期値として無視）')
+    ap.add_argument('--baseline-align', action='store_true',
+                    help='空運転との時刻ズレを波形(歯)の相互相関で自動整列してから差し引く（推奨）')
     args = ap.parse_args()
 
     here = os.path.dirname(os.path.abspath(__file__))
@@ -283,10 +329,17 @@ def main():
         if not base['t_s']:
             print('空運転CSVにデータがありません:', args.baseline)
             return 2
-        apply_baseline(d, base, shift=args.baseline_shift)
+        shift = args.baseline_shift
+        if args.baseline_align:
+            shift, corr = estimate_baseline_shift(d, base)
+            print('自動整列: 時刻シフト %.2f s（波形相関 %.3f）' % (shift, corr))
+            if corr < 0.5:
+                print('  ※ 相関が低いです。開始タイミングが大きく違う/別プログラムの可能性。'
+                      '--baseline-shift で手動調整も可。')
+        apply_baseline(d, base, shift=shift)
         baseline_note = ' [空運転差引済み]'
         print('空運転を差し引きました:', os.path.basename(args.baseline),
-              '(shift=%.2fs)' % args.baseline_shift)
+              '(shift=%.2fs)' % shift)
 
     s = summarize(d)
 
