@@ -114,6 +114,8 @@ FANUC ロボットで包丁の研磨（TORMEK T-8）を行う際に、**DynPick 
 `--demo` / `--port` / `--baud` / `--robot` / `--always-on` / `--detect busy|joints|both` / `--log` / `--log-path` / `--no-robodk` / `--no-open` / `--rate` / `--live` / `--plot`
 
 - `--live` … 記録しながら**リアルタイムで力/モーメントを別ウィンドウ表示**（直近30秒を流し表示）。要 matplotlib。
+  終了はグラフ窓の **STOPボタン / 窓を閉じる / q キー**（GUIにフォーカスがあると Ctrl+C が効かないため。端末での Ctrl+C も可）。
+  ※ ライブ表示中は再描画に時間を取られ実効サンプリングが下がる（50Hz指定で約25Hz）。フル速度で録りたいときは `--live` を外す。
 - `--plot` … 記録終了(Ctrl+C)後に**自動でグラフ(`plot_force_log.py`)を開く**。要 matplotlib。指定時はエクスプローラー表示より優先。
 - `--no-open` … 記録終了後にCSVフォルダをエクスプローラーで自動表示しない（既定は自動で開く）。
 - `--rate` … サンプリング周波数[Hz]。既定は **記録のみ(`--no-robodk`)=50Hz** / RoboDK連携=10Hz。

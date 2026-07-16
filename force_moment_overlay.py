@@ -360,11 +360,26 @@ class LivePlot:
             ax.grid(True, color='#CCCCCC', lw=0.6)
             ax.legend(loc='upper left', ncol=4, framealpha=0.9)
         self.ax2.set_xlabel('Time [s]')
-        self.ax1.set_title('Live (last %.0f s) - recording continues; Ctrl+C in terminal to stop'
+        self.ax1.set_title('Live (last %.0f s) - click STOP (or close window / press q) to finish'
                            % window_s)
-        self.fig.tight_layout()
+        # 下側にSTOPボタンの場所を空ける
+        self.fig.subplots_adjust(left=0.09, right=0.98, top=0.93, bottom=0.15, hspace=0.15)
+
         self.closed = False
+        self.stop_requested = False
+
+        # STOP ボタン（クリックで記録終了）。Ctrl+C が効かない環境の主要な終了手段。
+        self.btn = None
+        try:
+            from matplotlib.widgets import Button
+            axstop = self.fig.add_axes([0.83, 0.02, 0.14, 0.07])
+            self.btn = Button(axstop, 'STOP', color='#E8A0A0', hovercolor='#E05050')
+            self.btn.on_clicked(self._on_stop_clicked)
+        except Exception:
+            pass   # ボタンが作れなくても窓閉じ/qキー/Ctrl+C で終了可能
+
         self.fig.canvas.mpl_connect('close_event', self._on_close)
+        self.fig.canvas.mpl_connect('key_press_event', self._on_key)
         # ウィンドウを確実に表示（block=False + pause でGUIイベントを回して描画）
         try:
             plt.show(block=False)
@@ -374,6 +389,14 @@ class LivePlot:
 
     def _on_close(self, _evt):
         self.closed = True
+        self.stop_requested = True   # 窓を閉じたら記録も終了
+
+    def _on_stop_clicked(self, _evt):
+        self.stop_requested = True
+
+    def _on_key(self, evt):
+        if getattr(evt, 'key', None) in ('q', 'escape'):
+            self.stop_requested = True
 
     def push(self, t, f, m):
         fx, fy, fz = f
@@ -455,7 +478,7 @@ def main_headless():
     if LIVE_PLOT:
         try:
             live = LivePlot()
-            print('リアルタイム表示: ON（別ウィンドウ）')
+            print('リアルタイム表示: ON（別ウィンドウ）。終了はグラフの STOP ボタン / 窓を閉じる / q キー / 端末で Ctrl+C')
         except Exception as e:
             print('リアルタイム表示は使えませんでした（matplotlib未導入など）:', e)
             live = None
@@ -479,6 +502,9 @@ def main_headless():
             if live is not None:
                 live.push(ts, (fx, fy, fz), (mx, my, mz))
                 live.maybe_draw(t0)
+                if live.stop_requested:
+                    print('\n（STOP操作を検知しました）')
+                    break
             elapsed = time.time() - t0
             if elapsed < dt:
                 time.sleep(dt - elapsed)
