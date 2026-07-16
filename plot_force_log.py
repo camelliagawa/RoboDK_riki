@@ -23,7 +23,7 @@ import argparse
 
 # 実行中のコードの版。機能を変えたら日付.通番を上げる。起動時に端末・ウィンドウ
 # タイトル・操作パネルに表示され、「いま最新版で動いているか」を判別できるようにする。
-APP_VERSION = '2026-07-16.4'
+APP_VERSION = '2026-07-16.5'
 
 # =====================================================================
 #  グラフのデザイン設定（ここを編集すれば見た目を自由に変更できます）
@@ -159,6 +159,36 @@ def load_log(path):
             for k in cols:
                 cols[k].append(vals[k])
     return cols
+
+
+# force_log CSV に必須の列（これが揃っていないものは「関係ないCSV」とみなす）
+REQUIRED_COLS = ('t_s', 'fx_N', 'fy_N', 'fz_N', 'mx_Nm', 'my_Nm', 'mz_Nm',
+                 'Fmag_N', 'Mmag_Nm')
+
+
+def load_and_validate(path):
+    """CSV を読み込み、force_log 形式かどうか検証して列dictを返す。
+
+    force_log 形式でない/データが無い場合は分かりやすいメッセージの ValueError を送出する
+    （ドラッグ&ドロップで誤って関係ないCSVを入れたときにエラー表示するため）。
+    """
+    if not os.path.isfile(path):
+        raise ValueError('ファイルが見つかりません:\n' + path)
+    if not path.lower().endswith('.csv'):
+        raise ValueError('CSVファイルではありません:\n' + os.path.basename(path))
+    try:
+        with open(path, 'r', newline='', encoding='utf-8', errors='replace') as f:
+            header = next(csv.reader(f), [])
+    except Exception as e:
+        raise ValueError('ファイルを開けません:\n%s' % e)
+    missing = [c for c in REQUIRED_COLS if c not in header]
+    if missing:
+        raise ValueError('force_log 形式のCSVではありません。\n'
+                         '必要な列が足りません: ' + ', '.join(missing))
+    d = load_log(path)
+    if not d['t_s']:
+        raise ValueError('数値データの行がありません:\n' + os.path.basename(path))
+    return d
 
 
 def _interp(x, xs, ys):
@@ -334,13 +364,18 @@ def _add_top_headroom(ax, frac=0.28):
     ax.set_ylim(y0, y1 + frac * (y1 - y0))
 
 
-def make_figure(d, s, title, contact=None, style=None):
+def make_figure(d, s, title, contact=None, style=None, fig=None):
     import matplotlib.pyplot as plt
     S = style or STYLE
 
     t = d['t_s']
-    fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True,
-                                   figsize=(S['figsize_w'], S['figsize_h']))
+    if fig is None:
+        fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True,
+                                       figsize=(S['figsize_w'], S['figsize_h']))
+    else:
+        # 既存の図に描き直す（CSVをドロップで差し替えたときに使う）
+        fig.clear()
+        ax1, ax2 = fig.subplots(2, 1, sharex=True)
 
     lwc, lwm = S['lw_component'], S['lw_mag']
     leg = dict(loc=S['legend_loc'], ncol=4, framealpha=0.9)
@@ -782,6 +817,121 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
     fig._panel_widgets = keep
     return keep
 
+
+def _auto_title(path, s, baseline_note=''):
+    """自動生成のタイトル文字列（ファイル名＋最大値＋長さ）。"""
+    return '%s%s   |   max|F|=%.1fN  max|M|=%.2fN*m  (%.0fs)' % (
+        os.path.basename(path), baseline_note, s['fmax'], s['mmax'], s['dur'])
+
+
+def reopen_csv(fig, path, style, contact, with_panel=True):
+    """ドロップされた CSV を検証して、既存の図に描き直す。
+    force_log 形式でなければ ValueError を送出（呼び出し側でダイアログ表示）。"""
+    d = load_and_validate(path)      # 無効なら例外
+    s = summarize(d)
+    title = style['title'] if style.get('title') else _auto_title(path, s)
+    # 旧パネルのウィジェットが canvas に残したコールバック(draw_event等)を先に外す。
+    # 外さないと fig.clear() 後も古い CheckButtons 等が描画時に呼ばれてクラッシュする。
+    for w in getattr(fig, '_panel_widgets', []):
+        try:
+            w.disconnect_events()
+        except Exception:
+            pass
+    fig._panel_widgets = []
+    make_figure(d, s, title, contact=contact, style=style, fig=fig)
+    if with_panel:
+        fml = fig._fml
+        add_control_panel(fig, fml['ax1'], fml['ax2'], fml['lines'], fml['leg'],
+                          save_base=os.path.splitext(path)[0], save_dpi=style['dpi'])
+    try:
+        fig.canvas.manager.set_window_title(
+            'plot_force_log %s  -  %s' % (APP_VERSION, os.path.basename(path)))
+    except Exception:
+        pass
+    fig.canvas.draw_idle()
+    print('ドロップで読み込み:', path)
+
+
+def _canvas_kind(fig):
+    m = type(fig.canvas).__module__.lower()
+    if 'qt' in m:
+        return 'qt'
+    if 'tk' in m:
+        return 'tk'
+    return 'other'
+
+
+def _show_drop_error(fig, msg):
+    """ドロップ失敗を GUI ダイアログで知らせる（バックエンドに合わせる）。"""
+    print('ドロップ読み込みエラー:', ' '.join(msg.splitlines()))
+    try:
+        kind = _canvas_kind(fig)
+        if kind == 'qt':
+            from matplotlib.backends.qt_compat import QtWidgets
+            QtWidgets.QMessageBox.warning(fig.canvas, 'CSVを表示できません', msg)
+        elif kind == 'tk':
+            import tkinter.messagebox as mb
+            mb.showerror('CSVを表示できません', msg)
+    except Exception as e:
+        print('（エラーダイアログ表示に失敗:', e, '）')
+
+
+def enable_drag_and_drop(fig, on_path):
+    """グラフ領域への CSV ドラッグ&ドロップを有効にする。on_path(path) を呼ぶ。
+    Qt バックエンド（Anaconda 既定）で動作。成功で True。"""
+    kind = _canvas_kind(fig)
+    if kind == 'qt':
+        try:
+            return _install_qt_dnd(fig, on_path)
+        except Exception as e:
+            print('ドラッグ&ドロップ初期化に失敗（無効化）:', e)
+            return False
+    print('（ドラッグ&ドロップは Qt バックエンドで有効です。今は %s。'
+          'set MPLBACKEND=QtAgg で起動するか PyQt5 を導入してください）'
+          % type(fig.canvas).__module__)
+    return False
+
+
+def _install_qt_dnd(fig, on_path):
+    """Qt キャンバスにファイルドロップ用のイベントフィルタを取り付ける。"""
+    from matplotlib.backends.qt_compat import QtCore
+    canvas = fig.canvas
+    QEvent = QtCore.QEvent
+    ETy = getattr(QEvent, 'Type', QEvent)      # Qt6: QEvent.Type.*, Qt5: QEvent.*
+    DRAG_ENTER = getattr(ETy, 'DragEnter')
+    DRAG_MOVE = getattr(ETy, 'DragMove')
+    DROP = getattr(ETy, 'Drop')
+
+    class _DropFilter(QtCore.QObject):
+        def eventFilter(self, obj, ev):
+            # イベント処理中の例外を Qt(C++) 側へ漏らすとクラッシュしうるので必ず捕捉する
+            try:
+                t = ev.type()
+                if t in (DRAG_ENTER, DRAG_MOVE):
+                    md = ev.mimeData()
+                    if md is not None and md.hasUrls():
+                        ev.acceptProposedAction()
+                        return True
+                elif t == DROP:
+                    md = ev.mimeData()
+                    if md is not None and md.hasUrls():
+                        urls = md.urls()
+                        ev.acceptProposedAction()
+                        if urls:
+                            on_path(urls[0].toLocalFile())
+                        return True
+            except Exception as e:
+                print('ドロップ処理でエラー:', e)
+            return False
+
+    canvas.setAcceptDrops(True)
+    filt = _DropFilter(canvas)
+    canvas.installEventFilter(filt)
+    fig._dnd_filter = filt      # GC防止に参照を保持
+    print('ヒント: グラフ上に force_log_*.csv をドラッグ&ドロップすると差し替え表示します。')
+    return True
+
+
 def _shade_contact(ax, t, fmag, thr, color='#F0C000', alpha=0.12):
     """|F|>=thr の連続区間を軽く塗る。塗ったパッチのリストを返す（表示ON/OFF用）。"""
     patches = []
@@ -1205,6 +1355,15 @@ def main():
         if args.panel:
             add_control_panel(fig, ax1, ax2, lines, leg,
                               save_base=base, save_dpi=style['dpi'])
+
+        # グラフ領域への CSV ドラッグ&ドロップで差し替え表示（関係ないCSVはエラー表示）
+        def _on_drop(dropped):
+            try:
+                reopen_csv(fig, dropped, style, shade_thr, with_panel=args.panel)
+            except Exception as e:
+                _show_drop_error(fig, str(e))
+        enable_drag_and_drop(fig, _on_drop)
+
         plt.show()
     return 0
 

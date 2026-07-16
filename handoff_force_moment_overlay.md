@@ -152,6 +152,7 @@ FANUC ロボットで包丁の研磨（TORMEK T-8）を行う際に、**DynPick 
     - **Axis labels**（縦軸・横軸の**表記を自由に編集**。X(時間)/Y force/Y moment に文字を入れて Enter）
     - **Save image**（**Force / Moment を個別のクリーンな単体PNGで保存**。パネル・隣のグラフ・**タイトルは入らない**。保存結果はパネル内にも緑文字で表示）/ **Title**（タイトル文字の変更。**画面表示のみ。保存画像には入らない**）
   - **凡例**は上段・下段とも、データに重ならないよう上側に余白を自動確保して配置。
+  - **CSVのドラッグ&ドロップ**: グラフ領域に `force_log_*.csv` をドロップすると、その場で読み込み直して差し替え表示（`--panel` の内容も引き継ぐ）。force_log 形式でない/データが無いCSVは**表示を変えずエラーダイアログ**を出す。※ Qt バックエンド（Anaconda 既定）で有効。効かない場合は `set MPLBACKEND=QtAgg` で起動、または PyQt5 を導入。
   - 恒久設定(STYLE/plot_config.json)の追加キー: `show_title/legend/xaxis/yaxis/grid/shade`（`show_shade` 既定False）, `annotate_max`（最大点の表示・既定False）, `force_xaxis`（力グラフにもTime[s]軸）, `ls_fx`…`ls_mmag`（系列ごとの線種。既定は破線/点線/一点鎖線/実線）。
   - 各名称の変更: `title`, `force_ylabel`, `moment_ylabel`, `xlabel`, 凡例 `label_fx`…`label_mmag`（パネルの Axis labels でも編集可。日本語にするなら `font_family` も指定）。
   - 日本語ラベルにするなら `font_family` を `"Meiryo"` 等に（Windows）。`plot_config.json` は Git管理外。
