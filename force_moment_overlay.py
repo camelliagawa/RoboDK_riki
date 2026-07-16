@@ -342,7 +342,10 @@ class LivePlot:
         plt.ion()
         self.fig, (self.ax1, self.ax2) = plt.subplots(2, 1, sharex=True,
                                                        figsize=(10, 6))
-        self.fig.canvas.manager.set_window_title('DynPick リアルタイム 力/モーメント')
+        try:
+            self.fig.canvas.manager.set_window_title('DynPick Live Force/Moment')
+        except Exception:
+            pass   # バックエンドにより manager が無い/仕様違いでも致命的でない
         self.lines = {}
         for key, ax, comps, ylab in (
                 ('F', self.ax1, (('fx', 'Fx', 'x'), ('fy', 'Fy', 'y'),
@@ -357,11 +360,17 @@ class LivePlot:
             ax.grid(True, color='#CCCCCC', lw=0.6)
             ax.legend(loc='upper left', ncol=4, framealpha=0.9)
         self.ax2.set_xlabel('Time [s]')
-        self.ax1.set_title('直近 %.0f 秒（記録は継続中。終了は端末で Ctrl+C）' % window_s)
+        self.ax1.set_title('Live (last %.0f s) - recording continues; Ctrl+C in terminal to stop'
+                           % window_s)
         self.fig.tight_layout()
         self.closed = False
         self.fig.canvas.mpl_connect('close_event', self._on_close)
-        self.fig.show()
+        # ウィンドウを確実に表示（block=False + pause でGUIイベントを回して描画）
+        try:
+            plt.show(block=False)
+        except Exception:
+            self.fig.show()
+        plt.pause(0.05)
 
     def _on_close(self, _evt):
         self.closed = True
@@ -393,8 +402,8 @@ class LivePlot:
         for ax in (self.ax1, self.ax2):
             ax.relim(); ax.autoscale_view(scalex=False, scaley=True)
         try:
-            self.fig.canvas.draw_idle()
-            self.fig.canvas.flush_events()
+            # plt.pause は描画＋GUIイベント処理をまとめて行い、バックエンド差に強い
+            self.plt.pause(0.001)
         except Exception:
             self.closed = True
 
