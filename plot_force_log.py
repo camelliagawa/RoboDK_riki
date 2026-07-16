@@ -578,6 +578,12 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
             for k, c in (('fx', cx), ('fy', cy), ('fz', cz), ('fmag', cm),
                          ('mx', cx), ('my', cy), ('mz', cz), ('mmag', cm)):
                 lines[k].set_color(c)
+            # Mono は色で区別できないので、成分ごとに線種を自動で分けて区別可能にする
+            # （報告書用の白黒図をワンクリックで作れる）。色テーマ側は既存の線種を保持。
+            if nm == 'Mono':
+                for k, ls in (('fx', '-'), ('fy', '--'), ('fz', ':'),
+                              ('mx', '-'), ('my', '--'), ('mz', ':')):
+                    lines[k].set_linestyle(ls)
             redraw_legends(); fig.canvas.draw_idle()
         return f
     button_row(0.258, [(n, n) for n in COLOR_THEMES], theme_cb)
@@ -597,17 +603,59 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
     button_row(0.165, [('Force', 'f'), ('Moment', 'm'), ('Both', 'b')], save_cb,
                hover='#bfe3bf')
 
-    # --- 線種（全線・1行4）---
-    txt([0.655, 0.119, 0.2, 0.025], 'Line style (all lines)', 9)
+    # --- 線種（対象を選んでから線種。モノクロでも各系列を区別できる）---
+    #  全系列一括ではなく、成分ごと(X/Y/Z/|·|)に線種を変えられる。例えば X を選ぶと
+    #  力(Fx)とモーメント(Mx)の両方に効く（配色テーマと同じ成分グルーピング）。
+    #  「All」は従来どおり全系列まとめて変えるショートカット。
+    txt([0.655, 0.132, 0.34, 0.025], 'Line style  (pick target → style)', 9)
+
+    ls_groups = {
+        'All': ('fx', 'fy', 'fz', 'fmag', 'mx', 'my', 'mz', 'mmag'),
+        'X':   ('fx', 'mx'),
+        'Y':   ('fy', 'my'),
+        'Z':   ('fz', 'mz'),
+        '|·|': ('fmag', 'mmag'),
+    }
+    ls_target = ['All']
+    ls_tbtns = {}
+
+    def hl_target():
+        """現在選択中の対象ボタンだけをハイライトする。"""
+        for nm, b in ls_tbtns.items():
+            c = '#ffd27f' if nm == ls_target[0] else '0.95'
+            b.color = c
+            b.ax.set_facecolor(c)
+        fig.canvas.draw_idle()
+
+    # 高さ・戻り値付きのボタン行（対象ボタンをハイライト管理したいので button_row と別に用意）
+    def row_buttons(y, items, make_cb, hover, h=0.036):
+        out = {}
+        n = len(items); gap = 0.008; w = (0.335 - (n - 1) * gap) / n
+        for i, (label, val) in enumerate(items):
+            b = Button(fig.add_axes([0.655 + i * (w + gap), y, w, h]),
+                       label, hovercolor=hover)
+            b.on_clicked(make_cb(val)); keep.append(b)
+            out[val] = b
+        return out
+
+    def target_cb(nm):
+        def f(_e):
+            ls_target[0] = nm
+            hl_target()
+        return f
+    ls_tbtns = row_buttons(
+        0.092, [('All', 'All'), ('X', 'X'), ('Y', 'Y'), ('Z', 'Z'), ('|·|', '|·|')],
+        target_cb, hover='#ffe6b3')
 
     def ls_cb(ch):
         def f(_e):
-            for k in lines:
+            for k in ls_groups[ls_target[0]]:
                 lines[k].set_linestyle(ch)
             redraw_legends(); fig.canvas.draw_idle()
         return f
-    button_row(0.072, [('Solid', '-'), ('Dashed', '--'),
-                       ('Dotted', ':'), ('DashDot', '-.')], ls_cb, hover='#c8e0ff')
+    row_buttons(0.052, [('Solid', '-'), ('Dashed', '--'),
+                        ('Dotted', ':'), ('DashDot', '-.')], ls_cb, hover='#c8e0ff')
+    hl_target()
 
     # --- タイトル文字の変更 ---
     tb_title = TextBox(fig.add_axes([0.720, 0.020, 0.270, 0.038]), 'Title',
