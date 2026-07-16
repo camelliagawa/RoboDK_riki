@@ -483,6 +483,8 @@ def main():
                     help='左右の境界時刻[s]を手動指定（省略時は自動検出）')
     ap.add_argument('--auto-zero', action='store_true',
                     help='空運転CSVなしで各サイドの重力を自分自身から推定して差し引く（Webツールの工程ごと自動ゼロ相当）')
+    ap.add_argument('--auto-baseline', action='store_true',
+                    help='フォルダの air.csv(またはair.csv.csv)を自動で見つけてサイド別差引。無ければauto-zero。plot_sides.bat用')
     args = ap.parse_args()
 
     here = os.path.dirname(os.path.abspath(__file__))
@@ -491,6 +493,26 @@ def main():
         print('CSVが見つかりません。force_log_*.csv を作ってから実行してください。')
         print('（記録は  python force_moment_overlay.py --no-robodk --log ）')
         return 2
+
+    # --auto-baseline: air.csv / air.csv.csv を探して自動設定（拡張子二重も許容）
+    if args.auto_baseline and not args.baseline:
+        found = None
+        for base_dir in (here, os.getcwd()):
+            for cand in ('air.csv', 'air.csv.csv'):
+                p2 = os.path.join(base_dir, cand)
+                if os.path.isfile(p2):
+                    found = p2
+                    break
+            if found:
+                break
+        if found:
+            args.baseline = found
+            args.baseline_persides = True
+            print('空運転を自動検出:', found)
+        else:
+            args.auto_zero = True
+            print('air.csv が見つからないので --auto-zero にフォールバックします（精度は落ちます）。')
+            print('  正確に見たい場合: 空運転CSVをこのフォルダに air.csv という名前で置いてください。')
 
     d = load_log(path)
     if not d['t_s']:

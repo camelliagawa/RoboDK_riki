@@ -203,7 +203,7 @@ FANUC ロボットで包丁の研磨（TORMEK T-8）を行う際に、**DynPick 
 - `dynpick_sensor.py` … DynPick シリアル読み取り・LSB→N/Nm 換算。`python dynpick_sensor.py` でセルフテスト（HW不要）。
 - `plot_force_log.py` … CSV → 力/モーメント時系列グラフ（matplotlib）。`--no-show` / `--contact N`。
 - `record_force.bat` / `plot_force.bat` … デスクトップ起動用（ショートカットを作って使う）。
-- `plot_sides.bat` … 最新の研磨CSVを `air.csv`（空運転）で差引＋左右サマリ表示。**空運転を `air.csv` という名前でフォルダに置く**だけで使える。
+- `plot_sides.bat` … 最新の研磨CSVを `air.csv`（空運転）でサイド別差引＋左右サマリ表示（`--sides --auto-baseline`）。**空運転を `air.csv`（`air.csv.csv` も可）としてフォルダに置く**だけ。無ければ auto-zero にフォールバック。分岐はPython側(`--auto-baseline`)なので.batに特殊文字を入れず堅牢。
 - `make_shortcuts.bat` … デスクトップに `record_force` / `plot_force` / `plot_sides` ショートカットを自動作成（最初に一度ダブルクリック）。
 - `dynpick_check.py` … 接続・スケール確認ツール（RoboDK不要）。
 - `dynpick_calib.py` … 軸校正ツール（対話式）。
