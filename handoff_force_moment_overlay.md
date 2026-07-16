@@ -1,15 +1,16 @@
 # 引き継ぎ書 : DynPick 力覚センサ 力/モーメント 記録・可視化
 
-> Claude Code での継続作業用ハンドオフ。まず本書と `force_moment_overlay.py` を読んでから着手すること。
-> 作業ブランチ: `claude/force-moment-viz-complete-fv2yz1`
+> Claude Code での継続作業用ハンドオフ。まず本書と `force_moment_overlay.py` / `plot_force_log.py` を読んでから着手すること。
+> 作業ブランチ: `claude/handoff-doc-update-ly2ak8`（旧 `claude/force-moment-viz-complete-fv2yz1` の内容も統合済み）
 
 ---
 
 ## 0. 3行サマリ（まずこれ）
 
-- **このロボットは RoboDK から実機をリアルタイム駆動できない**（FANUC の Stream Motion オプション R784 未導入を実機確認）。
-- そのため本番は **ロボット＝ティーチペンダントで KENMA 実行 / 力＝PCで `--no-robodk` 記録** の分担運用に確定。
-- **記録(`record_force.bat`)→グラフ化(`plot_force_log.py`)** まで実装・両PCで動作確認済み。**グラフは記録用・分析用どちらのPCからでも見られる**（両PCに matplotlib が入っていればよい）。残りは実研磨データの取得と微調整のみ。
+- **RoboDK から実機をリアルタイム駆動できない**（Stream Motion R784 未導入）ので、本番は **ロボット＝ペンダントで KENMA 実行 / 力＝PCで `--no-robodk` 記録**。
+- **測定値は工具自重（重力）に支配される**。姿勢ごとに違う重力を消すため、**「包丁付き・砥石だけ逃がした空運転」を1本撮り、`plot_sides`（`--baseline-persides`）で差し引く**のが正解。空運転1本は同じ包丁・同じ角度なら使い回せる（順番を変えてもOK）。
+- 直近結果（`..._161538.csv`）: **包丁をしっかり固定したら左右がほぼ均等**（HaR≈2.2N / HaL≈2.1N, 比0.96）。以前の弱く非対称だった主因は固定の甘さ。次は条件を振って比較する段階。
+- 可視化は `plot_force_log.py` に成長: **空運転差引・左右サマリ・操作パネル(`--panel`)・デザイン設定(`plot_config.json`)・力/モーメント個別保存(`--save-split`)** まで実装済み。
 
 ---
 
@@ -139,15 +140,16 @@ FANUC ロボットで包丁の研磨（TORMEK T-8）を行う際に、**DynPick 
 - `--contact N` … |F|≥N を加工区間として薄く塗る。
 - `--seg-thr N`（既定1.0）… 接触区間の判定しきい値。**区間ごとの平均/最大力・空中ベースラインを表で出力**。
 - `--no-seg` … 上記の区間解析を出さない。 / `--no-show` … 画面表示せずPNG保存のみ。
+- `--save-split` … **力とモーメントを別々のPNG**（`<名前>_force.png` / `_moment.png`）にも保存。パネルの「Save image」ボタン(Force/Moment/Both)でも保存できる（こちらは操作パネルでの変更を反映）。
 - **グラフの見た目（色/範囲/文字）の変更**:
   - コードを触らず変えるなら **`plot_config.json`**（`plot_config.example.json` をコピーして編集、同フォルダに置く。書いた項目だけ上書き）。
   - コード内なら `plot_force_log.py` 冒頭の **`STYLE` 辞書**。
   - 一時的な変更は実行時オプション: `--title` / `--xlim MIN MAX` / `--ylim-force MIN MAX` / `--ylim-moment MIN MAX` / `--figsize W H` / `--dpi`。
   - **`--panel`** … グラフ画面右に**操作パネルを常時表示**。`plot_force.bat`/`plot_sides.bat` は既定で付与。保存PNGはパネル無しのきれいな図（パネル追加前に保存）。パネルの内容:
-    - **Series**（系列ON/OFF・色付きチェック）/ **Elements**（Title・Legend・X-axis・Y-axis・Grid・Shade の表示ON/OFF）
+    - **Series**（系列ON/OFF・色付きチェック）/ **Elements**（Title・Legend・X-axis・Y-axis・Grid・Shade・**Max pt** の表示ON/OFF）
     - **Range**（X/F/M に "min max" 入力、空でAuto）/ **Auto range** / **Colors**（Default/Vivid/Warm/Mono）
-    - **Line style**（Solid/Dashed/Dotted/DashDot・全線一括）/ **Title**（タイトル文字の変更）
-  - 恒久設定(STYLE/plot_config.json)の追加キー: `show_title/legend/xaxis/yaxis/grid/shade`, `force_xaxis`（力グラフにもTime[s]軸）, `ls_fx`…`ls_mmag`（系列ごとの線種）。
+    - **Save image**（Force / Moment / Both を個別PNG保存）/ **Line style**（Solid/Dashed/Dotted/DashDot・全線一括）/ **Title**（タイトル文字の変更）
+  - 恒久設定(STYLE/plot_config.json)の追加キー: `show_title/legend/xaxis/yaxis/grid/shade`, `annotate_max`（最大点の表示）, `force_xaxis`（力グラフにもTime[s]軸）, `ls_fx`…`ls_mmag`（系列ごとの線種）。
   - 各名称の変更: `title`, `force_ylabel`, `moment_ylabel`, `xlabel`, 凡例 `label_fx`…`label_mmag`（日本語にするなら `font_family` も指定）。
   - 日本語ラベルにするなら `font_family` を `"Meiryo"` 等に（Windows）。`plot_config.json` は Git管理外。
 
@@ -182,12 +184,13 @@ FANUC ロボットで包丁の研磨（TORMEK T-8）を行う際に、**DynPick 
 - [x] 差引の2課題を解明:
       (1) 空運転6.0N vs 研磨8.3N の約2.3N差は、**空運転で包丁を外したため**（自重が抜けた）。→ 空運転は**包丁付き・砥石だけ逃がして**撮る。
       (2) 空運転270s vs 研磨276s の尺差は **LS同一なので動作は同尺、記録開始ボタンのタイミング差だけ**。→ 一定シフトで整列可能。
-- [x] **歯(パス)で自動整列する差引を実装**（`--baseline-align`）。相互相関で開始ズレを推定（既存データで −4.9s, 相関0.98を確認）。
-- [ ] **【最優先】包丁付きの空運転を撮り直し → 自動整列差引で真の接触力を確認**:
-      `python plot_force_log.py 研磨.csv --baseline 空運転_包丁付.csv --baseline-align`。
-      その差引後グラフで左右(HaR/HaL)の接触力を比較し、刃の位置/反転軸・CNTを調整。
-- [ ] **（空運転差引後に）左右の接触力を揃えるプロセス調整** … 差引後の左右接触力を比較し、刃の砥石中心に対する
-      位置/反転軸を点検して両側を中庸・対称に。`HaR=CNT30` / `HaL=CNT60` の不一致も揃える。
+- [x] **差引ツール群を実装**: `--baseline-align`（相互相関で開始ズレ整列, −4.9s/相関0.98）、`--baseline-persides`（右/左の姿勢ブロックを姿勢で対応づけ個別整列＝**研磨順を変えても空運転1本でOK**）、`--sides`（左右サマリ）、`--auto-zero`（空運転なし・簡易/HaR過大に注意）。
+- [x] **包丁付き空運転で真の接触力を確認**（2026-07-16, `air.csv.csv` + `..._142905/150321/152234/161538`）:
+      - 包丁の固定が甘い頃: HaR≈0.6N / HaL≈1.1N（右がほとんど当たっていない）。切込みを増やしても右は変化せず → 位置ズレを疑い。
+      - **包丁をしっかり固定 (`161538`)**: **HaR≈2.2N / HaL≈2.1N、比0.96 でほぼ均等**。接触力も約3倍。→ **固定の甘さが主因だった**。
+- [ ] **【次はここ】条件を振って比較**（固定を確実にした状態で）… 押付け/速度/パス数などを変えつつ、毎回 `plot_sides` で
+      左右比・接触力レベルを記録。狙いの研磨量に対して力が適正か、左右均等が保てるかを詰める。空運転は使い回し可（`air.csv`）。
+- [ ] **（必要なら）左右の微調整** … 差引後の左右比が崩れたら、刃の砥石中心に対する位置/反転軸・`HaR=CNT30`/`HaL=CNT60`の不一致を点検。
 - [ ] **感度/零点の実機校正（任意・精度向上）** … `dynpick_sensor.py` の `DEFAULT_SENS_*` は出荷特性値。
       厳密な絶対値が要るなら既知荷重で校正。相対変化・傾向を見る用途なら現状で十分。
 - [ ] **モーメント向きの検証（任意）** … 必要なら既知トルクで確認。
@@ -204,7 +207,10 @@ FANUC ロボットで包丁の研磨（TORMEK T-8）を行う際に、**DynPick 
 - 軸マッピング・感度はセンサ取付向き/個体依存。**取付を変えたら必ず再校正**。
 - `--no-robodk` の CSV は TCP 位置が空欄（実機位置は取れない）。力と位置を対応付けたい場合は時刻でプログラム工程と突き合わせる。
 - 記録は毎行 flush なので Ctrl+C で止めても残る。長時間で間引くなら `LOG_EVERY` を上げる。
-- グラフの軸ラベルは英語（matplotlib の日本語フォント依存を避けるため）。
+- グラフの軸ラベル/凡例/操作パネルの文字は既定で英語（matplotlib の日本語フォント欠落で豆腐化するのを避けるため）。日本語にするなら `plot_config.json` の `font_family` を `"Meiryo"` 等に設定。
+- **空運転(`air.csv`)は「包丁付き・砥石だけ逃がす」で撮る**。包丁を外すと自重が変わり差引が狂う。撮り直しが要るのは包丁/治具交換・角度(W/P/R)大変更時のみ（食い込み/速度/順番の変更では不要）。
+- `plot_sides.bat` は同フォルダの `air.csv`(または`air.csv.csv`)を自動使用。Windowsで拡張子非表示のまま "air.csv" と付けると `air.csv.csv` になる点に注意（両方許容済み）。
+- 記録中の `--live` はGUIにフォーカスがあると Ctrl+C が効かない → **STOPボタン/窓を閉じる/qキー**で終了。
 
 ---
 
@@ -212,21 +218,34 @@ FANUC ロボットで包丁の研磨（TORMEK T-8）を行う際に、**DynPick 
 
 - `force_moment_overlay.py` … 本体（記録 + RoboDK矢印 + DynPick接続 + `--no-robodk`）。
 - `dynpick_sensor.py` … DynPick シリアル読み取り・LSB→N/Nm 換算。`python dynpick_sensor.py` でセルフテスト（HW不要）。
-- `plot_force_log.py` … CSV → 力/モーメント時系列グラフ（matplotlib）。`--no-show` / `--contact N`。
-- `record_force.bat` / `plot_force.bat` … デスクトップ起動用（ショートカットを作って使う）。
+- `plot_force_log.py` … CSV → 力/モーメント時系列グラフ（matplotlib）。**空運転差引(`--baseline*`)・左右サマリ(`--sides`)・自動ゼロ(`--auto-zero`)・操作パネル(`--panel`)・個別保存(`--save-split`)・デザイン設定(STYLE/`plot_config.json`)** を内蔵。関数: `make_figure`(線ハンドル返す)/`add_control_panel`/`apply_baseline`*/`estimate_baseline_shift`/`detect_phase_split`/`side_summary`/`auto_zero`/`save_axes_region`。
+- `plot_config.example.json` … デザイン変更のテンプレート。`plot_config.json` にコピーして編集（同フォルダ）。`plot_config.json` は Git管理外。
+- `record_force.bat` / `plot_force.bat` … デスクトップ起動用（ショートカットを作って使う）。`plot_force.bat` は `--panel` 付き。
 - `plot_sides.bat` … 最新の研磨CSVを `air.csv`（空運転）でサイド別差引＋左右サマリ表示（`--sides --auto-baseline`）。**空運転を `air.csv`（`air.csv.csv` も可）としてフォルダに置く**だけ。無ければ auto-zero にフォールバック。分岐はPython側(`--auto-baseline`)なので.batに特殊文字を入れず堅牢。
 - `make_shortcuts.bat` … デスクトップに `record_force` / `plot_force` / `plot_sides` ショートカットを自動作成（最初に一度ダブルクリック）。
 - `dynpick_check.py` … 接続・スケール確認ツール（RoboDK不要）。
 - `dynpick_calib.py` … 軸校正ツール（対話式）。
 - `calibration_guide.md` … 校正/運用の手順書。
 - `requirements.txt` … `pyserial`（記録）/ `matplotlib`（グラフ）。`robodk` は矢印表示時のみ。
-- `.gitignore` … `__pycache__/` `*.pyc` `force_log_*.csv`。
+- `.gitignore` … `__pycache__/` `*.pyc` `force_log_*.csv` `plot_config.json`。
 - `.gitattributes` … `*.bat` を CRLF で取り出し（cmd 互換）。
 
 ---
 
 ## 9. Claude Code への依頼例
 
-- 「実研磨の `force_log_xxx.csv` を見たい。加工区間（|F|≥N）を自動判定して、区間ごとの最大/平均力を集計して。」
+- 「研磨と空運転のCSVを渡すので、`--baseline-persides --sides` で左右の接触力を出して。」
 - 「条件違いの複数CSVを1枚のグラフに重ねて比較したい。」
+- 「パネルに『線ごとに色を選ぶボタン』や『凡例の位置変更』を追加して。」
 - 「押した方向と符号が合わないので `AXIS_MAP_FORCE` を修正して。」
+
+---
+
+## 10. このセッション(2026-07-16)で実装した主な追加
+
+- 記録: `--rate`(headless既定50Hz) / `--live`(STOPボタン等で終了) / `--plot`(終了後自動グラフ) / `--no-open` / 保存後にフォルダを開く。
+- 差引: `--baseline` `--baseline-align` `--baseline-persides`(順番非依存) `--baseline-shift` / `--sides` `--split` / `--auto-zero`(空運転なし簡易) / `--auto-baseline`(air.csv自動検出, `plot_sides.bat`用)。
+- デザイン: `STYLE`辞書 + `plot_config.json` + 実行時オプション(`--title/--xlim/--ylim-*/--figsize/--dpi`) + **操作パネル`--panel`**（系列/要素ON-OFF・範囲・配色・線種・個別保存・タイトル変更）。
+- 出力: `--save-split`（力/モーメント個別PNG）/ 最大点のON-OFF。
+- ツール: `plot_sides.bat`（左右比較ワンクリック）/ `make_shortcuts.bat`（`record_force`/`plot_force`/`plot_sides`）/ `plot_config.example.json`。
+- プロセス知見: **測定は重力支配→空運転差引が必須**、**包丁の固定を確実にしたら左右均等(≈2.2N)**。
