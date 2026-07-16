@@ -16,16 +16,83 @@ import os
 import sys
 import csv
 import glob
+import json
 import argparse
 
-# 力[N] と モーメント[N*m] はスケールが違うので、デュアル軸にせず 2段に分ける。
-# X/Y/Z の3系列は色覚異常でも区別できる Okabe-Ito 配色を固定順で割り当て、
-# 合力 |F|・合モーメント |M| は太い濃色（ink）で強調する。
-COLOR_X = '#D55E00'   # vermillion
-COLOR_Y = '#009E73'   # green
-COLOR_Z = '#0072B2'   # blue
-COLOR_MAG = '#222222'  # 濃いグレー（合成値の強調線）
-GRID_COLOR = '#CCCCCC'
+# =====================================================================
+#  グラフのデザイン設定（ここを編集すれば見た目を自由に変更できます）
+#  ・コードを触りたくない場合は、同じフォルダに plot_config.json を置くと
+#    同じキーで上書きできます（plot_config.example.json を参照）。
+#  ・一部は実行時オプションでも変更できます（--title --xlim --ylim-force など）。
+# =====================================================================
+STYLE = {
+    # --- 色（'#RRGGBB' か 色名）---
+    'color_x': '#D55E00',      # X 成分（Fx / Mx）
+    'color_y': '#009E73',      # Y 成分（Fy / My）
+    'color_z': '#0072B2',      # Z 成分（Fz / Mz）
+    'color_mag': '#222222',    # 合成値（|F| / |M|）の強調線
+    'grid_color': '#CCCCCC',   # グリッド線
+    'contact_color': '#F0C000',  # 加工区間の塗り
+    'contact_alpha': 0.12,     # 加工区間の塗りの濃さ 0-1
+
+    # --- 線の太さ ---
+    'lw_component': 1.2,       # 成分線
+    'lw_mag': 2.0,             # 合成値線
+    'grid_lw': 0.6,            # グリッド線
+
+    # --- 図のサイズ・解像度 ---
+    'figsize_w': 11.0,
+    'figsize_h': 7.0,
+    'dpi': 120,                # PNG保存の解像度
+    'font_family': None,       # 日本語ラベルにするなら 'Meiryo' 等（Windows）。Noneで既定
+
+    # --- 文字（ラベル・凡例・タイトル）---
+    'force_ylabel': 'Force [N]',
+    'moment_ylabel': 'Moment [N*m]',
+    'xlabel': 'Time [s]',
+    'label_fx': 'Fx', 'label_fy': 'Fy', 'label_fz': 'Fz', 'label_fmag': '|F|',
+    'label_mx': 'Mx', 'label_my': 'My', 'label_mz': 'Mz', 'label_mmag': '|M|',
+    'title': None,             # None=自動生成。文字列を入れると固定タイトル
+    'title_fontsize': 11,
+    'legend_loc': 'upper right',
+    'legend_fontsize': None,   # None=既定
+
+    # --- 表示範囲（None=自動）---
+    'xlim_min': None, 'xlim_max': None,
+    'force_ylim_min': None, 'force_ylim_max': None,
+    'moment_ylim_min': None, 'moment_ylim_max': None,
+
+    # --- 最大点の注釈 ---
+    'annotate_max': True,
+    'annotate_fontsize': 9,
+
+    # --- 系列の表示ON/OFF（不要な線を消せる）---
+    'show_fx': True, 'show_fy': True, 'show_fz': True, 'show_fmag': True,
+    'show_mx': True, 'show_my': True, 'show_mz': True, 'show_mmag': True,
+}
+
+
+def load_style(here):
+    """STYLE を複製し、plot_config.json があればそのキーで上書きして返す。"""
+    style = dict(STYLE)
+    for base_dir in (here, os.getcwd()):
+        p = os.path.join(base_dir, 'plot_config.json')
+        if os.path.isfile(p):
+            try:
+                with open(p, 'r', encoding='utf-8') as f:
+                    over = json.load(f)
+                for k, v in over.items():
+                    if k.startswith('_'):
+                        continue   # "_"始まりはコメント扱い
+                    if k in style:
+                        style[k] = v
+                    else:
+                        print('（plot_config.json: 未知のキー「%s」は無視）' % k)
+                print('デザイン設定を読み込みました:', p)
+            except Exception as e:
+                print('plot_config.json の読み込みに失敗（無視して既定を使用）:', e)
+            break
+    return style
 
 
 def find_latest_csv(folder):
@@ -220,48 +287,70 @@ def summarize(d):
     return s
 
 
-def make_figure(d, s, title, contact=None):
+def make_figure(d, s, title, contact=None, style=None):
     import matplotlib.pyplot as plt
+    S = style or STYLE
 
     t = d['t_s']
-    fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(11, 7))
+    fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True,
+                                   figsize=(S['figsize_w'], S['figsize_h']))
+
+    lwc, lwm = S['lw_component'], S['lw_mag']
+    leg = dict(loc=S['legend_loc'], ncol=4, framealpha=0.9)
+    if S['legend_fontsize']:
+        leg['fontsize'] = S['legend_fontsize']
 
     # --- 上段: 力 [N] ---
-    ax1.plot(t, d['fx_N'], color=COLOR_X, lw=1.2, label='Fx')
-    ax1.plot(t, d['fy_N'], color=COLOR_Y, lw=1.2, label='Fy')
-    ax1.plot(t, d['fz_N'], color=COLOR_Z, lw=1.2, label='Fz')
-    ax1.plot(t, d['Fmag_N'], color=COLOR_MAG, lw=2.0, label='|F|')
-    if s['fmax_t'] is not None:
+    fseries = (('show_fx', 'fx_N', 'color_x', 'label_fx', lwc),
+               ('show_fy', 'fy_N', 'color_y', 'label_fy', lwc),
+               ('show_fz', 'fz_N', 'color_z', 'label_fz', lwc),
+               ('show_fmag', 'Fmag_N', 'color_mag', 'label_fmag', lwm))
+    for show, col, ckey, lkey, lw in fseries:
+        if S[show]:
+            ax1.plot(t, d[col], color=S[ckey], lw=lw, label=S[lkey])
+    if S['annotate_max'] and S['show_fmag'] and s['fmax_t'] is not None:
         ax1.annotate('max |F| = %.1f N' % s['fmax'],
                      xy=(s['fmax_t'], s['fmax']),
                      xytext=(8, -14), textcoords='offset points',
-                     fontsize=9, color=COLOR_MAG)
-        ax1.plot([s['fmax_t']], [s['fmax']], 'o', color=COLOR_MAG, ms=5)
-    ax1.set_ylabel('Force [N]')
-    ax1.grid(True, color=GRID_COLOR, lw=0.6)
-    ax1.legend(loc='upper right', ncol=4, framealpha=0.9)
-    ax1.set_title(title, fontsize=11)
+                     fontsize=S['annotate_fontsize'], color=S['color_mag'])
+        ax1.plot([s['fmax_t']], [s['fmax']], 'o', color=S['color_mag'], ms=5)
+    ax1.set_ylabel(S['force_ylabel'])
+    ax1.grid(True, color=S['grid_color'], lw=S['grid_lw'])
+    ax1.legend(**leg)
+    ax1.set_title(title, fontsize=S['title_fontsize'])
+    if S['force_ylim_min'] is not None or S['force_ylim_max'] is not None:
+        ax1.set_ylim(S['force_ylim_min'], S['force_ylim_max'])
 
     # --- 下段: モーメント [N*m] ---
-    ax2.plot(t, d['mx_Nm'], color=COLOR_X, lw=1.2, label='Mx')
-    ax2.plot(t, d['my_Nm'], color=COLOR_Y, lw=1.2, label='My')
-    ax2.plot(t, d['mz_Nm'], color=COLOR_Z, lw=1.2, label='Mz')
-    ax2.plot(t, d['Mmag_Nm'], color=COLOR_MAG, lw=2.0, label='|M|')
-    ax2.set_ylabel('Moment [N*m]')
-    ax2.set_xlabel('Time [s]')
-    ax2.grid(True, color=GRID_COLOR, lw=0.6)
-    ax2.legend(loc='upper right', ncol=4, framealpha=0.9)
+    mseries = (('show_mx', 'mx_Nm', 'color_x', 'label_mx', lwc),
+               ('show_my', 'my_Nm', 'color_y', 'label_my', lwc),
+               ('show_mz', 'mz_Nm', 'color_z', 'label_mz', lwc),
+               ('show_mmag', 'Mmag_Nm', 'color_mag', 'label_mmag', lwm))
+    for show, col, ckey, lkey, lw in mseries:
+        if S[show]:
+            ax2.plot(t, d[col], color=S[ckey], lw=lw, label=S[lkey])
+    ax2.set_ylabel(S['moment_ylabel'])
+    ax2.set_xlabel(S['xlabel'])
+    ax2.grid(True, color=S['grid_color'], lw=S['grid_lw'])
+    ax2.legend(**leg)
+    if S['moment_ylim_min'] is not None or S['moment_ylim_max'] is not None:
+        ax2.set_ylim(S['moment_ylim_min'], S['moment_ylim_max'])
+
+    # --- 表示する時間範囲（xlim）---
+    if S['xlim_min'] is not None or S['xlim_max'] is not None:
+        ax1.set_xlim(S['xlim_min'], S['xlim_max'])
 
     # --- 加工区間（|F|>=contact）を薄く塗る（任意）---
     if contact is not None:
         for ax in (ax1, ax2):
-            _shade_contact(ax, t, d['Fmag_N'], contact)
+            _shade_contact(ax, t, d['Fmag_N'], contact,
+                           color=S['contact_color'], alpha=S['contact_alpha'])
 
     fig.tight_layout()
     return fig
 
 
-def _shade_contact(ax, t, fmag, thr):
+def _shade_contact(ax, t, fmag, thr, color='#F0C000', alpha=0.12):
     """|F|>=thr の連続区間を軽く塗る。"""
     start = None
     for i in range(len(t)):
@@ -269,10 +358,10 @@ def _shade_contact(ax, t, fmag, thr):
         if on and start is None:
             start = t[i]
         elif not on and start is not None:
-            ax.axvspan(start, t[i], color='#F0C000', alpha=0.12)
+            ax.axvspan(start, t[i], color=color, alpha=alpha)
             start = None
     if start is not None:
-        ax.axvspan(start, t[-1], color='#F0C000', alpha=0.12)
+        ax.axvspan(start, t[-1], color=color, alpha=alpha)
 
 
 def _median(values):
@@ -485,6 +574,17 @@ def main():
                     help='空運転CSVなしで各サイドの重力を自分自身から推定して差し引く（Webツールの工程ごと自動ゼロ相当）')
     ap.add_argument('--auto-baseline', action='store_true',
                     help='フォルダの air.csv(またはair.csv.csv)を自動で見つけてサイド別差引。無ければauto-zero。plot_sides.bat用')
+    # --- 見た目（デザイン）の実行時オプション。恒久的に変えるなら STYLE か plot_config.json ---
+    ap.add_argument('--title', help='グラフのタイトル文字列（既定は自動生成）')
+    ap.add_argument('--xlim', nargs=2, type=float, metavar=('MIN', 'MAX'),
+                    help='時間軸の表示範囲[s] 例: --xlim 0 150')
+    ap.add_argument('--ylim-force', nargs=2, type=float, metavar=('MIN', 'MAX'),
+                    help='力[N]の縦軸範囲 例: --ylim-force -2 10')
+    ap.add_argument('--ylim-moment', nargs=2, type=float, metavar=('MIN', 'MAX'),
+                    help='モーメント[N*m]の縦軸範囲 例: --ylim-moment -1 1')
+    ap.add_argument('--figsize', nargs=2, type=float, metavar=('W', 'H'),
+                    help='図のサイズ(インチ) 例: --figsize 12 7')
+    ap.add_argument('--dpi', type=float, help='PNG保存の解像度 例: --dpi 150')
     args = ap.parse_args()
 
     here = os.path.dirname(os.path.abspath(__file__))
@@ -591,10 +691,27 @@ def main():
             if not args.baseline and not args.auto_zero:
                 print('※ 重力未除去です。--baseline 空運転.csv（正確）か --auto-zero（簡易）を併用してください。')
 
+    # デザイン設定を読み込み（plot_config.json → 実行時オプションの順で上書き）
+    style = load_style(here)
+    if args.xlim:
+        style['xlim_min'], style['xlim_max'] = args.xlim
+    if args.ylim_force:
+        style['force_ylim_min'], style['force_ylim_max'] = args.ylim_force
+    if args.ylim_moment:
+        style['moment_ylim_min'], style['moment_ylim_max'] = args.ylim_moment
+    if args.figsize:
+        style['figsize_w'], style['figsize_h'] = args.figsize
+    if args.dpi:
+        style['dpi'] = args.dpi
+    if args.title is not None:
+        style['title'] = args.title
+
     try:
         import matplotlib
         if args.no_show:
             matplotlib.use('Agg')   # 画面なしでも保存できるように
+        if style.get('font_family'):
+            matplotlib.rcParams['font.family'] = style['font_family']
         import matplotlib.pyplot as plt
     except ImportError:
         print('matplotlib がありません。 pip install matplotlib を実行してください。')
@@ -603,13 +720,14 @@ def main():
     # --contact 指定があればその値で、無ければ接触判定しきい値で加工区間を塗る
     shade_thr = args.contact if args.contact is not None else (
         None if args.no_seg else args.seg_thr)
-    title = '%s%s   |   max|F|=%.1fN  max|M|=%.2fN*m  (%.0fs)' % (
+    auto_title = '%s%s   |   max|F|=%.1fN  max|M|=%.2fN*m  (%.0fs)' % (
         os.path.basename(path), baseline_note, s['fmax'], s['mmax'], s['dur'])
-    fig = make_figure(d, s, title, contact=shade_thr)
+    title = style['title'] if style.get('title') else auto_title
+    fig = make_figure(d, s, title, contact=shade_thr, style=style)
 
     suffix = '_baselined' if args.baseline else ''
     png = os.path.splitext(path)[0] + suffix + '.png'
-    fig.savefig(png, dpi=120)
+    fig.savefig(png, dpi=style['dpi'])
     print('グラフを保存 :', png)
 
     if not args.no_show:

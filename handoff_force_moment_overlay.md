@@ -139,6 +139,11 @@ FANUC ロボットで包丁の研磨（TORMEK T-8）を行う際に、**DynPick 
 - `--contact N` … |F|≥N を加工区間として薄く塗る。
 - `--seg-thr N`（既定1.0）… 接触区間の判定しきい値。**区間ごとの平均/最大力・空中ベースラインを表で出力**。
 - `--no-seg` … 上記の区間解析を出さない。 / `--no-show` … 画面表示せずPNG保存のみ。
+- **グラフの見た目（色/範囲/文字）の変更**:
+  - コードを触らず変えるなら **`plot_config.json`**（`plot_config.example.json` をコピーして編集、同フォルダに置く。書いた項目だけ上書き）。
+  - コード内なら `plot_force_log.py` 冒頭の **`STYLE` 辞書**。
+  - 一時的な変更は実行時オプション: `--title` / `--xlim MIN MAX` / `--ylim-force MIN MAX` / `--ylim-moment MIN MAX` / `--figsize W H` / `--dpi`。
+  - 日本語ラベルにするなら `font_family` を `"Meiryo"` 等に（Windows）。`plot_config.json` は Git管理外。
 
 ### 補助ツール（センサのみ、RoboDK不要）
 - `python dynpick_check.py --list` / `--scan-baud` / ライブ表示 … ポート・ボーレート確認、最大値からスケール目安。
