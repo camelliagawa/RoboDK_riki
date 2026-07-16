@@ -321,7 +321,8 @@ def side_summary(d, split):
     t, F = d['t_s'], d['Fmag_N']
 
     def stat(a, b):
-        v = sorted(F[i] for i in range(len(t)) if a <= t[i] < b)
+        # F<=0 は自動ゼロで非活性(=非接触/反転区間)として0化した点なので集計から除く
+        v = sorted(F[i] for i in range(len(t)) if a <= t[i] < b and F[i] > 0.0)
         if not v:
             return None
         n = len(v)
@@ -340,6 +341,61 @@ def side_summary(d, split):
     if right and left and right[2] > 0:
         out.append('左/右 の中央値比 = %.2f 倍（1.0で左右均等）' % (left[2] / right[2]))
     return out
+
+
+def auto_zero(d, active_thr=0.5, split=None, ref_frac=0.15):
+    """空運転CSVなしで、各サイド(HaR/HaL)の重力オフセットを自分自身から推定して差し引く。
+
+    Webツールの「工程ごと自動ゼロ」に相当。手順:
+      1) |F|>=active_thr の活性区間（＝研磨で当たっている区間）を検出。
+      2) 左右(HaR/HaL)に振り分け、各サイドの活性サンプルのうち |F| が小さい側 ref_frac を
+         「そのサイドの非接触＝重力レベル」とみなし、各成分の平均をオフセットとする。
+      3) 活性サンプルはそのオフセットを引く。非活性(反転/退避/開始前)は0にする。
+    注意: 姿勢変化のリップルは残るので、精密には空運転差引(--baseline)が上。
+          ただし砥石を動かさずボタンだけで左右ゼロ比較したいときに有効。
+    戻り値: (d, split)
+    """
+    t, F = d['t_s'], d['Fmag_N']
+    n = len(t)
+    comps = ('fx_N', 'fy_N', 'fz_N', 'mx_Nm', 'my_Nm', 'mz_Nm')
+    if split is None:
+        split = detect_phase_split(t, list(F))
+    segs = detect_segments(t, F, active_thr)
+    if not segs:
+        return d, split
+    active = [False] * n
+    sideR, sideL = [], []
+    for a, b in segs:
+        mid = 0.5 * (t[a] + t[b])
+        is_r = (split is None) or (mid < split)
+        for i in range(a, b + 1):
+            active[i] = True
+            (sideR if is_r else sideL).append(i)
+
+    def gravity(idxs):
+        if not idxs:
+            return None
+        order = sorted(idxs, key=lambda i: F[i])
+        ref = order[:max(1, int(len(order) * ref_frac))]
+        return {k: sum(d[k][i] for i in ref) / len(ref) for k in comps}
+
+    gR, gL = gravity(sideR), gravity(sideL)
+    for i in range(n):
+        if not active[i]:
+            for k in comps:
+                d[k][i] = 0.0
+            d['Fmag_N'][i] = 0.0
+            d['Mmag_Nm'][i] = 0.0
+            continue
+        g = gR if ((split is None) or t[i] < split) else gL
+        if g:
+            for k in comps:
+                d[k][i] -= g[k]
+        fx, fy, fz = d['fx_N'][i], d['fy_N'][i], d['fz_N'][i]
+        mx, my, mz = d['mx_Nm'][i], d['my_Nm'][i], d['mz_Nm'][i]
+        d['Fmag_N'][i] = (fx * fx + fy * fy + fz * fz) ** 0.5
+        d['Mmag_Nm'][i] = (mx * mx + my * my + mz * mz) ** 0.5
+    return d, split
 
 
 def main():
@@ -365,6 +421,8 @@ def main():
                     help='右(HaR)/左(HaL)を自動で分けて、各サイドの|F|統計を表示（左右の接触力比較）')
     ap.add_argument('--split', type=float, default=None,
                     help='左右の境界時刻[s]を手動指定（省略時は自動検出）')
+    ap.add_argument('--auto-zero', action='store_true',
+                    help='空運転CSVなしで各サイドの重力を自分自身から推定して差し引く（Webツールの工程ごと自動ゼロ相当）')
     args = ap.parse_args()
 
     here = os.path.dirname(os.path.abspath(__file__))
@@ -405,6 +463,12 @@ def main():
         baseline_note = ' [空運転差引済み]'
         print('空運転を差し引きました:', os.path.basename(args.baseline),
               '(shift=%.2fs)' % shift)
+    elif args.auto_zero:
+        _, split_t = auto_zero(d, split=split_t)
+        baseline_note = ' [自動ゼロ済み(空運転なし)]'
+        print('自動ゼロ: 各サイドの重力を自分自身から推定して差し引きました。')
+        print('  ⚠ 砥石から離れず押しっぱなしの側（例: HaR）は、姿勢リップルを接触力と')
+        print('     誤認して過大に出ます。正確な左右比較には --baseline（空運転）を使ってください。')
 
     s = summarize(d)
 
@@ -430,8 +494,8 @@ def main():
         else:
             for ln in side_summary(d, split_t):
                 print(ln)
-            if not args.baseline:
-                print('※ --baseline 併用推奨: 重力を引かないと左右とも重力込みの値になります。')
+            if not args.baseline and not args.auto_zero:
+                print('※ 重力未除去です。--baseline 空運転.csv（正確）か --auto-zero（簡易）を併用してください。')
 
     try:
         import matplotlib
