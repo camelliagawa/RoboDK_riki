@@ -11,4 +11,4 @@ rem  If no air.csv is found it falls back to a rough auto-zero.
 rem
 rem  Needs matplotlib: pip install matplotlib
 rem ============================================================
-powershell -NoExit -ExecutionPolicy Bypass -Command "Set-Location -LiteralPath '%~dp0'; python plot_force_log.py --sides --auto-baseline"
+powershell -NoExit -ExecutionPolicy Bypass -Command "Set-Location -LiteralPath '%~dp0'; python plot_force_log.py --sides --auto-baseline --panel"

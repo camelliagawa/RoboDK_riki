@@ -300,14 +300,17 @@ def make_figure(d, s, title, contact=None, style=None):
     if S['legend_fontsize']:
         leg['fontsize'] = S['legend_fontsize']
 
+    lines = {}   # 'fx','fy',... -> Line2D（操作パネルから触れるよう常に生成し可視だけ切替）
+
     # --- 上段: 力 [N] ---
-    fseries = (('show_fx', 'fx_N', 'color_x', 'label_fx', lwc),
-               ('show_fy', 'fy_N', 'color_y', 'label_fy', lwc),
-               ('show_fz', 'fz_N', 'color_z', 'label_fz', lwc),
-               ('show_fmag', 'Fmag_N', 'color_mag', 'label_fmag', lwm))
-    for show, col, ckey, lkey, lw in fseries:
-        if S[show]:
-            ax1.plot(t, d[col], color=S[ckey], lw=lw, label=S[lkey])
+    fseries = (('fx', 'fx_N', 'color_x', 'label_fx', lwc),
+               ('fy', 'fy_N', 'color_y', 'label_fy', lwc),
+               ('fz', 'fz_N', 'color_z', 'label_fz', lwc),
+               ('fmag', 'Fmag_N', 'color_mag', 'label_fmag', lwm))
+    for key, col, ckey, lkey, lw in fseries:
+        (ln,) = ax1.plot(t, d[col], color=S[ckey], lw=lw, label=S[lkey])
+        ln.set_visible(S['show_' + key])
+        lines[key] = ln
     if S['annotate_max'] and S['show_fmag'] and s['fmax_t'] is not None:
         ax1.annotate('max |F| = %.1f N' % s['fmax'],
                      xy=(s['fmax_t'], s['fmax']),
@@ -316,25 +319,27 @@ def make_figure(d, s, title, contact=None, style=None):
         ax1.plot([s['fmax_t']], [s['fmax']], 'o', color=S['color_mag'], ms=5)
     ax1.set_ylabel(S['force_ylabel'])
     ax1.grid(True, color=S['grid_color'], lw=S['grid_lw'])
-    ax1.legend(**leg)
     ax1.set_title(title, fontsize=S['title_fontsize'])
     if S['force_ylim_min'] is not None or S['force_ylim_max'] is not None:
         ax1.set_ylim(S['force_ylim_min'], S['force_ylim_max'])
 
     # --- 下段: モーメント [N*m] ---
-    mseries = (('show_mx', 'mx_Nm', 'color_x', 'label_mx', lwc),
-               ('show_my', 'my_Nm', 'color_y', 'label_my', lwc),
-               ('show_mz', 'mz_Nm', 'color_z', 'label_mz', lwc),
-               ('show_mmag', 'Mmag_Nm', 'color_mag', 'label_mmag', lwm))
-    for show, col, ckey, lkey, lw in mseries:
-        if S[show]:
-            ax2.plot(t, d[col], color=S[ckey], lw=lw, label=S[lkey])
+    mseries = (('mx', 'mx_Nm', 'color_x', 'label_mx', lwc),
+               ('my', 'my_Nm', 'color_y', 'label_my', lwc),
+               ('mz', 'mz_Nm', 'color_z', 'label_mz', lwc),
+               ('mmag', 'Mmag_Nm', 'color_mag', 'label_mmag', lwm))
+    for key, col, ckey, lkey, lw in mseries:
+        (ln,) = ax2.plot(t, d[col], color=S[ckey], lw=lw, label=S[lkey])
+        ln.set_visible(S['show_' + key])
+        lines[key] = ln
     ax2.set_ylabel(S['moment_ylabel'])
     ax2.set_xlabel(S['xlabel'])
     ax2.grid(True, color=S['grid_color'], lw=S['grid_lw'])
-    ax2.legend(**leg)
     if S['moment_ylim_min'] is not None or S['moment_ylim_max'] is not None:
         ax2.set_ylim(S['moment_ylim_min'], S['moment_ylim_max'])
+
+    _refresh_legend(ax1, lines, ('fx', 'fy', 'fz', 'fmag'), leg)
+    _refresh_legend(ax2, lines, ('mx', 'my', 'mz', 'mmag'), leg)
 
     # --- 表示する時間範囲（xlim）---
     if S['xlim_min'] is not None or S['xlim_max'] is not None:
@@ -347,7 +352,115 @@ def make_figure(d, s, title, contact=None, style=None):
                            color=S['contact_color'], alpha=S['contact_alpha'])
 
     fig.tight_layout()
-    return fig
+    return fig, ax1, ax2, lines, leg
+
+
+def _refresh_legend(ax, lines, keys, leg_kwargs):
+    """可視な線だけで凡例を作り直す（系列ON/OFFに追従させるため）。"""
+    handles = [lines[k] for k in keys if lines[k].get_visible()]
+    if handles:
+        ax.legend(handles, [h.get_label() for h in handles], **leg_kwargs)
+    elif ax.get_legend():
+        ax.get_legend().remove()
+
+
+# X/Y/Z/合成 の色を系列に割り当てる配色テーマ（操作パネルの色ボタン用）
+COLOR_THEMES = {
+    'Default': ('#D55E00', '#009E73', '#0072B2', '#222222'),
+    'Vivid':   ('#E6194B', '#3CB44B', '#4363D8', '#000000'),
+    'Warm':    ('#D7263D', '#F46036', '#2E294E', '#1B1B1E'),
+    'Mono':    ('#333333', '#777777', '#AAAAAA', '#000000'),
+}
+
+
+def add_control_panel(fig, ax1, ax2, lines, leg):
+    """グラフ右側に操作パネル（系列ON/OFF・範囲入力・配色ボタン）を常時表示する。"""
+    from matplotlib.widgets import CheckButtons, TextBox, Button
+
+    fig.subplots_adjust(left=0.08, right=0.68, top=0.93, bottom=0.10, hspace=0.18)
+    keep = []   # ウィジェットがGCされないよう参照を保持
+
+    order = [('fx', 'Fx'), ('fy', 'Fy'), ('fz', 'Fz'), ('fmag', '|F|'),
+             ('mx', 'Mx'), ('my', 'My'), ('mz', 'Mz'), ('mmag', '|M|')]
+    labels = [lb for _, lb in order]
+
+    # --- 系列ON/OFF ---
+    ax_chk = fig.add_axes([0.72, 0.50, 0.26, 0.43])
+    ax_chk.set_title('Series (show/hide)', fontsize=9)
+    chk = CheckButtons(ax_chk, labels, [lines[k].get_visible() for k, _ in order])
+
+    def on_check(label):
+        k = order[labels.index(label)][0]
+        lines[k].set_visible(not lines[k].get_visible())
+        _refresh_legend(ax1, lines, ('fx', 'fy', 'fz', 'fmag'), leg)
+        _refresh_legend(ax2, lines, ('mx', 'my', 'mz', 'mmag'), leg)
+        fig.canvas.draw_idle()
+    chk.on_clicked(on_check)
+    keep.append(chk)
+
+    # --- 範囲入力（"min max" を空白区切りで。空でオート）---
+    def make_range_box(y, label, ax_target, axis):
+        ax_tb = fig.add_axes([0.80, y, 0.16, 0.045])
+        tb = TextBox(ax_tb, label, initial='')
+
+        def submit(text):
+            text = text.strip()
+            try:
+                if text == '':
+                    ax_target.autoscale(axis=axis)
+                else:
+                    a, b = text.replace(',', ' ').split()
+                    if axis == 'x':
+                        ax_target.set_xlim(float(a), float(b))
+                    else:
+                        ax_target.set_ylim(float(a), float(b))
+                fig.canvas.draw_idle()
+            except Exception:
+                pass
+        tb.on_submit(submit)
+        keep.append(tb)
+
+    ax_lbl = fig.add_axes([0.72, 0.44, 0.26, 0.03]); ax_lbl.axis('off')
+    ax_lbl.text(0, 0, 'Range  "min max"  (Enter; empty=Auto)', fontsize=8)
+    make_range_box(0.375, 'X [s]', ax1, 'x')       # x は共有なので ax1 に設定
+    make_range_box(0.315, 'F [N]', ax1, 'y')
+    make_range_box(0.255, 'M[Nm]', ax2, 'y')
+
+    # --- オート（全部自動範囲に戻す）---
+    ax_auto = fig.add_axes([0.80, 0.195, 0.16, 0.05])
+    btn_auto = Button(ax_auto, 'Auto range')
+
+    def on_auto(_):
+        for ax in (ax1, ax2):
+            ax.relim()
+            ax.autoscale()
+        fig.canvas.draw_idle()
+    btn_auto.on_clicked(on_auto)
+    keep.append(btn_auto)
+
+    # --- 配色テーマ（色ボタン）---
+    ax_ct = fig.add_axes([0.72, 0.135, 0.26, 0.03]); ax_ct.axis('off')
+    ax_ct.text(0, 0, 'Colors', fontsize=9)
+    theme_names = list(COLOR_THEMES.keys())
+    for i, name in enumerate(theme_names):
+        bx = 0.72 + (i % 2) * 0.135
+        by = 0.075 - (i // 2) * 0.055
+        ax_b = fig.add_axes([bx, by, 0.125, 0.045])
+        b = Button(ax_b, name)
+
+        def on_theme(_evt, nm=name):
+            cx, cy, cz, cm = COLOR_THEMES[nm]
+            for k, col in (('fx', cx), ('fy', cy), ('fz', cz), ('fmag', cm),
+                           ('mx', cx), ('my', cy), ('mz', cz), ('mmag', cm)):
+                lines[k].set_color(col)
+            _refresh_legend(ax1, lines, ('fx', 'fy', 'fz', 'fmag'), leg)
+            _refresh_legend(ax2, lines, ('mx', 'my', 'mz', 'mmag'), leg)
+            fig.canvas.draw_idle()
+        b.on_clicked(on_theme)
+        keep.append(b)
+
+    fig._panel_widgets = keep   # GC防止に図へぶら下げる
+    return keep
 
 
 def _shade_contact(ax, t, fmag, thr, color='#F0C000', alpha=0.12):
@@ -585,6 +698,8 @@ def main():
     ap.add_argument('--figsize', nargs=2, type=float, metavar=('W', 'H'),
                     help='図のサイズ(インチ) 例: --figsize 12 7')
     ap.add_argument('--dpi', type=float, help='PNG保存の解像度 例: --dpi 150')
+    ap.add_argument('--panel', action='store_true',
+                    help='グラフ画面に操作パネル(系列ON/OFF・範囲入力・配色ボタン)を常時表示')
     args = ap.parse_args()
 
     here = os.path.dirname(os.path.abspath(__file__))
@@ -723,14 +838,17 @@ def main():
     auto_title = '%s%s   |   max|F|=%.1fN  max|M|=%.2fN*m  (%.0fs)' % (
         os.path.basename(path), baseline_note, s['fmax'], s['mmax'], s['dur'])
     title = style['title'] if style.get('title') else auto_title
-    fig = make_figure(d, s, title, contact=shade_thr, style=style)
+    fig, ax1, ax2, lines, leg = make_figure(d, s, title, contact=shade_thr, style=style)
 
+    # PNGは操作パネルを付ける前に保存（保存画像はパネル無しのきれいなグラフ）
     suffix = '_baselined' if args.baseline else ''
     png = os.path.splitext(path)[0] + suffix + '.png'
     fig.savefig(png, dpi=style['dpi'])
     print('グラフを保存 :', png)
 
     if not args.no_show:
+        if args.panel:
+            add_control_panel(fig, ax1, ax2, lines, leg)
         plt.show()
     return 0
 
