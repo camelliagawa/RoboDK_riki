@@ -23,7 +23,7 @@ import argparse
 
 # 実行中のコードの版。機能を変えたら日付.通番を上げる。起動時に端末・ウィンドウ
 # タイトル・操作パネルに表示され、「いま最新版で動いているか」を判別できるようにする。
-APP_VERSION = '2026-07-16.3'
+APP_VERSION = '2026-07-16.4'
 
 # =====================================================================
 #  グラフのデザイン設定（ここを編集すれば見た目を自由に変更できます）
@@ -86,8 +86,9 @@ STYLE = {
     'force_xaxis': True,    # 力(上段)グラフにも Time[s] 目盛りを表示
 
     # --- 線種（'-'=実線, '--'=破線, ':'=点線, '-.'=一点鎖線）系列ごとに指定可 ---
-    'ls_fx': '-', 'ls_fy': '-', 'ls_fz': '-', 'ls_fmag': '-',
-    'ls_mx': '-', 'ls_my': '-', 'ls_mz': '-', 'ls_mmag': '-',
+    #  既定: X=破線 / Y=点線 / Z=一点鎖線 / 合成=実線（白黒でも成分を区別できる）
+    'ls_fx': '--', 'ls_fy': ':', 'ls_fz': '-.', 'ls_fmag': '-',
+    'ls_mx': '--', 'ls_my': ':', 'ls_mz': '-.', 'ls_mmag': '-',
 }
 
 
@@ -327,6 +328,12 @@ def summarize(d):
     return s
 
 
+def _add_top_headroom(ax, frac=0.28):
+    """凡例(upper right)がデータの曲線に重ならないよう、上側にだけ余白を足す。"""
+    y0, y1 = ax.get_ylim()
+    ax.set_ylim(y0, y1 + frac * (y1 - y0))
+
+
 def make_figure(d, s, title, contact=None, style=None):
     import matplotlib.pyplot as plt
     S = style or STYLE
@@ -368,6 +375,8 @@ def make_figure(d, s, title, contact=None, style=None):
     ax1.set_title(title, fontsize=S['title_fontsize'])
     if S['force_ylim_min'] is not None or S['force_ylim_max'] is not None:
         ax1.set_ylim(S['force_ylim_min'], S['force_ylim_max'])
+    else:
+        _add_top_headroom(ax1)
 
     # --- 下段: モーメント [N*m] ---
     mseries = (('mx', 'mx_Nm', 'color_x', 'label_mx', lwc),
@@ -383,6 +392,8 @@ def make_figure(d, s, title, contact=None, style=None):
     ax2.set_xlabel(S['xlabel'])
     if S['moment_ylim_min'] is not None or S['moment_ylim_max'] is not None:
         ax2.set_ylim(S['moment_ylim_min'], S['moment_ylim_max'])
+    else:
+        _add_top_headroom(ax2)
 
     # 力(上段)にも Time[s] 軸を出す（sharexで隠れる下端目盛りを復活）
     if S['force_xaxis']:
@@ -431,14 +442,25 @@ def make_figure(d, s, title, contact=None, style=None):
 
 def save_axes_region(fig, axes_list, out_path, dpi):
     """図の中の指定axes（と付随ラベル/凡例）だけを切り出してPNG保存する。
-    現在の見た目（色・表示ON/OFF・範囲など操作パネルでの変更）を反映する。"""
+    現在の見た目（色・表示ON/OFF・範囲など操作パネルでの変更）を反映する。
+    保存画像にはタイトル（キャプション）は入れない（画面表示上は残す）。"""
     from matplotlib.transforms import Bbox
-    fig.canvas.draw()
-    r = fig.canvas.get_renderer()
-    bb = Bbox.union([ax.get_tightbbox(r) for ax in axes_list])
-    ext = bb.transformed(fig.dpi_scale_trans.inverted())
-    ext = ext.padded(0.12)   # 各辺に約0.12インチだけ余白（隣のグラフを巻き込まない）
-    fig.savefig(out_path, bbox_inches=ext, dpi=dpi)
+    # タイトルを一時的に隠して保存（tightbbox もタイトル分を確保しなくなる）
+    hidden = [ax.title for ax in fig.axes
+              if ax.title.get_text() and ax.title.get_visible()]
+    for t in hidden:
+        t.set_visible(False)
+    try:
+        fig.canvas.draw()
+        r = fig.canvas.get_renderer()
+        bb = Bbox.union([ax.get_tightbbox(r) for ax in axes_list])
+        ext = bb.transformed(fig.dpi_scale_trans.inverted())
+        ext = ext.padded(0.12)   # 各辺に約0.12インチだけ余白（隣のグラフを巻き込まない）
+        fig.savefig(out_path, bbox_inches=ext, dpi=dpi)
+    finally:
+        for t in hidden:
+            t.set_visible(True)
+        fig.canvas.draw_idle()
     return out_path
 
 
@@ -463,19 +485,19 @@ COLOR_THEMES = {
 def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
     """グラフ右側に操作パネルを常時表示する（カード状にグループ分け）。
 
-    Series/Elements の表示ON/OFF・表示範囲・配色・線種（成分別）・力/モーメントの
-    個別保存（保存結果を画面にも表示）・タイトル変更。保存は「力だけ」「モーメントだけ」の
-    クリーンな単体PNGを書き出す（操作パネルや隣のグラフは入らない）。
+    Series/Elements の表示ON/OFF・表示範囲・配色・線種（成分別）・軸ラベルの編集・
+    力/モーメントの個別保存（保存結果を画面にも表示）・タイトル変更。保存は「力だけ」
+    「モーメントだけ」のクリーンな単体PNG（操作パネル・隣のグラフ・タイトルは入らない）。
     """
     from matplotlib.widgets import CheckButtons, TextBox, Button
     from matplotlib.patches import FancyBboxPatch
 
     S = fig._fml['style'] if hasattr(fig, '_fml') else STYLE
-    fig.set_size_inches(max(fig.get_figwidth(), 14.0), max(fig.get_figheight(), 8.4))
-    fig.subplots_adjust(left=0.06, right=0.62, top=0.94, bottom=0.08, hspace=0.22)
+    fig.set_size_inches(max(fig.get_figwidth(), 14.0), max(fig.get_figheight(), 9.0))
+    fig.subplots_adjust(left=0.06, right=0.62, top=0.945, bottom=0.075, hspace=0.22)
 
     # 版を図の右上隅に小さく（パネルは保存PNGより後に付くので保存画像には入らない）
-    fig.text(0.992, 0.987, 'ver ' + APP_VERSION, ha='right', va='top',
+    fig.text(0.992, 0.988, 'ver ' + APP_VERSION, ha='right', va='top',
              fontsize=8, color='#9aa0a6')
 
     keep = []
@@ -521,20 +543,20 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
     # =====================================================================
     #  1) Series / Elements（表示ON/OFF）
     # =====================================================================
-    card(0.590, 0.958)
-    head(L + 0.006, 0.945, 'Series')
-    head(0.826, 0.945, 'Elements')
+    card(0.652, 0.956)
+    head(L + 0.006, 0.944, 'Series')
+    head(0.826, 0.944, 'Elements')
 
     order = [('fx', 'Fx'), ('fy', 'Fy'), ('fz', 'Fz'), ('fmag', '|F|'),
              ('mx', 'Mx'), ('my', 'My'), ('mz', 'Mz'), ('mmag', '|M|')]
     slabels = [lb for _, lb in order]
-    ax_s = fig.add_axes([0.664, 0.598, 0.150, 0.328]); ax_s.set_axis_off()
+    ax_s = fig.add_axes([0.664, 0.660, 0.150, 0.272]); ax_s.set_axis_off()
     scolors = [lines[k].get_color() for k, _ in order]
     try:
         chk_s = CheckButtons(ax_s, slabels, [lines[k].get_visible() for k, _ in order],
-                             frame_props={'s': 96, 'facecolor': 'white',
+                             frame_props={'s': 92, 'facecolor': 'white',
                                           'edgecolor': '#9aa0a6', 'linewidth': 1.1},
-                             check_props={'s': 96, 'facecolor': scolors},
+                             check_props={'s': 92, 'facecolor': scolors},
                              label_props={'color': scolors})
     except TypeError:
         chk_s = CheckButtons(ax_s, slabels, [lines[k].get_visible() for k, _ in order])
@@ -553,12 +575,12 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
               ax2.get_xaxis().get_visible(), ax1.get_yaxis().get_visible(),
               grid_on[0], any(p.get_visible() for p in ax1._shade_patches),
               bool(has_max and ax1._maxann.get_visible())]
-    ax_e = fig.add_axes([0.827, 0.598, 0.150, 0.328]); ax_e.set_axis_off()
+    ax_e = fig.add_axes([0.827, 0.660, 0.150, 0.272]); ax_e.set_axis_off()
     try:
         chk_e = CheckButtons(ax_e, elabels, estate,
-                             frame_props={'s': 96, 'facecolor': 'white',
+                             frame_props={'s': 92, 'facecolor': 'white',
                                           'edgecolor': '#9aa0a6', 'linewidth': 1.1},
-                             check_props={'s': 96, 'facecolor': '#444444'})
+                             check_props={'s': 92, 'facecolor': '#444444'})
     except TypeError:
         chk_e = CheckButtons(ax_e, elabels, estate)
 
@@ -600,12 +622,12 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
     # =====================================================================
     #  2) View range
     # =====================================================================
-    card(0.398, 0.575)
-    head(L + 0.006, 0.560, 'View range')
-    note(L + 0.006, 0.539, 'type "min  max", Enter  ·  empty = Auto')
+    card(0.498, 0.642)
+    head(L + 0.006, 0.630, 'View range')
+    note(L + 0.006, 0.613, 'type "min  max", Enter  ·  empty = Auto')
 
     def make_range_box(y, label, ax_target, axis):
-        tb = TextBox(fig.add_axes([0.748, y, 0.160, 0.033]), label, initial='')
+        tb = TextBox(fig.add_axes([0.748, y, 0.160, 0.026]), label, initial='')
 
         def submit(text):
             text = text.strip()
@@ -619,12 +641,12 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
             except Exception:
                 pass
         tb.on_submit(submit); keep.append(tb)
-    make_range_box(0.502, 'X [s]', ax1, 'x')
-    make_range_box(0.462, 'F [N]', ax1, 'y')
-    make_range_box(0.422, 'M [Nm]', ax2, 'y')
-    b_auto = Button(fig.add_axes([0.748, 0.402, 0.160, 0.030]), 'Auto range',
+    make_range_box(0.582, 'X [s]', ax1, 'x')
+    make_range_box(0.552, 'F [N]', ax1, 'y')
+    make_range_box(0.522, 'M [Nm]', ax2, 'y')
+    b_auto = Button(fig.add_axes([0.748, 0.500, 0.160, 0.020]), 'Auto range',
                     color=BTN_C, hovercolor=BTN_HOVER)
-    b_auto.label.set_fontsize(9.5)
+    b_auto.label.set_fontsize(9.0)
 
     def on_auto(_):
         for ax in (ax1, ax2):
@@ -635,9 +657,9 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
     # =====================================================================
     #  3) Colors（配色テーマ）
     # =====================================================================
-    card(0.312, 0.380)
-    head(L + 0.006, 0.367, 'Colors')
-    note(R - 0.006, 0.367, 'Mono also sets line styles', ha='right')
+    card(0.418, 0.484)
+    head(L + 0.006, 0.471, 'Colors')
+    note(R - 0.006, 0.471, 'Mono also sets line styles', ha='right')
 
     def theme_cb(nm):
         def f(_e):
@@ -645,22 +667,21 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
             for k, c in (('fx', cx), ('fy', cy), ('fz', cz), ('fmag', cm),
                          ('mx', cx), ('my', cy), ('mz', cz), ('mmag', cm)):
                 lines[k].set_color(c)
-            # Mono は色で区別できないので、成分ごとに線種を自動で分けて区別可能にする
-            # （報告書用の白黒図をワンクリックで作れる）。色テーマ側は既存の線種を保持。
+            # Mono は色で区別できないので、成分ごとに線種を自動で分けて区別可能にする。
             if nm == 'Mono':
                 for k, ls in (('fx', '-'), ('fy', '--'), ('fz', ':'),
                               ('mx', '-'), ('my', '--'), ('mz', ':')):
                     lines[k].set_linestyle(ls)
             redraw_legends(); fig.canvas.draw_idle()
         return f
-    button_row(0.320, 0.038, [(n, n) for n in COLOR_THEMES], theme_cb)
+    button_row(0.424, 0.036, [(n, n) for n in COLOR_THEMES], theme_cb)
 
     # =====================================================================
     #  4) Line style（対象を選んでから線種＝成分ごとに変えられる）
     # =====================================================================
-    card(0.168, 0.300)
-    head(L + 0.006, 0.287, 'Line style')
-    note(0.760, 0.287, 'pick target, then style')
+    card(0.284, 0.406)
+    head(L + 0.006, 0.393, 'Line style')
+    note(0.760, 0.393, 'pick target, then style')
 
     ls_groups = {
         'All': ('fx', 'fy', 'fz', 'fmag', 'mx', 'my', 'mz', 'mmag'),
@@ -685,7 +706,7 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
             ls_target[0] = nm
             hl_target()
         return f
-    button_row(0.234, 0.036,
+    button_row(0.344, 0.034,
                [('All', 'All'), ('X', 'X'), ('Y', 'Y'), ('Z', 'Z'),
                 ('|·|', '|·|')],
                target_cb, hover='#ffe6b3', keepmap=ls_tbtns)
@@ -696,17 +717,35 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
                 lines[k].set_linestyle(ch)
             redraw_legends(); fig.canvas.draw_idle()
         return f
-    button_row(0.192, 0.036, [('Solid', '-'), ('Dashed', '--'),
+    button_row(0.302, 0.034, [('Solid', '-'), ('Dashed', '--'),
                               ('Dotted', ':'), ('DashDot', '-.')], ls_cb, hover='#c8e0ff')
     hl_target()
 
     # =====================================================================
-    #  5) Save image（力だけ / モーメントだけ のクリーンな単体PNG）
+    #  5) Axis labels（縦軸・横軸の表記を自由に変更）
     # =====================================================================
-    card(0.070, 0.158)
-    head(L + 0.006, 0.146, 'Save image')
-    save_status = fig.text(L + 0.006, 0.082,
-                           'saves Force / Moment as separate clean PNGs',
+    card(0.148, 0.272)
+    head(L + 0.006, 0.260, 'Axis labels')
+    note(0.792, 0.260, 'Enter to apply')
+
+    def make_label_box(y, label, setter, initial):
+        tb = TextBox(fig.add_axes([0.775, y, 0.133, 0.026]), label, initial=initial)
+
+        def submit(text):
+            setter(text); fig.canvas.draw_idle()
+        tb.on_submit(submit); keep.append(tb)
+    make_label_box(0.226, 'X (time)', lambda tx: [ax1.set_xlabel(tx), ax2.set_xlabel(tx)],
+                   ax2.get_xlabel())
+    make_label_box(0.194, 'Y force', lambda tx: ax1.set_ylabel(tx), ax1.get_ylabel())
+    make_label_box(0.162, 'Y moment', lambda tx: ax2.set_ylabel(tx), ax2.get_ylabel())
+
+    # =====================================================================
+    #  6) Save image（力だけ / モーメントだけ のクリーンな単体PNG）
+    # =====================================================================
+    card(0.048, 0.136)
+    head(L + 0.006, 0.124, 'Save image')
+    save_status = fig.text(L + 0.006, 0.061,
+                           'saves Force / Moment as separate clean PNGs (no title)',
                            fontsize=8, color=SUB_C, ha='left', va='center')
 
     def save_cb(which):
@@ -726,12 +765,12 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
                 save_status.set_color('#b00020')
             fig.canvas.draw_idle()
         return f
-    button_row(0.100, 0.038, [('Force', 'f'), ('Moment', 'm')], save_cb, hover='#bfe3bf')
+    button_row(0.080, 0.036, [('Force', 'f'), ('Moment', 'm')], save_cb, hover='#bfe3bf')
 
     # =====================================================================
-    #  6) Title（グラフのキャプション）
+    #  7) Title（グラフのキャプション。画面表示のみ。保存画像には入らない）
     # =====================================================================
-    tb_title = TextBox(fig.add_axes([0.735, 0.020, 0.250, 0.034]), 'Title ',
+    tb_title = TextBox(fig.add_axes([0.735, 0.014, 0.250, 0.030]), 'Title ',
                        initial=fig._fml.get('title_text', '') if hasattr(fig, '_fml') else '')
 
     def on_title(text):
@@ -996,11 +1035,16 @@ def main():
         mtime = '?'
     print('plot_force_log.py  version %s  （このファイル更新: %s）'
           % (APP_VERSION, mtime))
-    path = args.csv or find_latest_csv(here) or find_latest_csv(os.getcwd())
+    # 記録CSVが無ければ、同梱の samples/ にあるサンプルCSVで開く（動作確認・見本用）。
+    sample_dir = os.path.join(here, 'samples')
+    path = (args.csv or find_latest_csv(here) or find_latest_csv(os.getcwd())
+            or find_latest_csv(sample_dir))
     if not path or not os.path.isfile(path):
         print('CSVが見つかりません。force_log_*.csv を作ってから実行してください。')
         print('（記録は  python force_moment_overlay.py --no-robodk --log ）')
         return 2
+    if os.path.dirname(os.path.abspath(path)) == os.path.abspath(sample_dir):
+        print('※ 記録CSVが無いので同梱のサンプルを開いています:', os.path.basename(path))
 
     # --auto-baseline: air.csv / air.csv.csv を探して自動設定（拡張子二重も許容）
     if args.auto_baseline and not args.baseline:
@@ -1140,11 +1184,15 @@ def main():
     except Exception:
         pass
 
-    # PNGは操作パネルを付ける前に保存（保存画像はパネル無しのきれいなグラフ）
+    # PNGは操作パネルを付ける前に保存（保存画像はパネル無しのきれいなグラフ）。
+    # 保存画像にはタイトル（キャプション）を入れない（画面表示上は残す）。
     suffix = '_baselined' if args.baseline else ''
     base = os.path.splitext(path)[0] + suffix
     png = base + '.png'
+    _title_vis = ax1.title.get_visible()
+    ax1.title.set_visible(False)
     fig.savefig(png, dpi=style['dpi'])
+    ax1.title.set_visible(_title_vis)
     print('グラフを保存 :', png)
 
     # 力/モーメントを別々のPNGにも保存（--save-split）
