@@ -133,6 +133,74 @@ def _shade_contact(ax, t, fmag, thr):
         ax.axvspan(start, t[-1], color='#F0C000', alpha=0.12)
 
 
+def _median(values):
+    v = sorted(values)
+    n = len(v)
+    if n == 0:
+        return 0.0
+    return v[n // 2] if n % 2 else 0.5 * (v[n // 2 - 1] + v[n // 2])
+
+
+def detect_segments(t, fmag, thr, min_dur=0.4, merge_gap=0.3):
+    """|F|>=thr の接触区間を (start_i, end_i) のリストで返す。
+
+    merge_gap 秒以下の短い途切れは1区間に連結し、min_dur 秒未満の区間は捨てる
+    （砥石の噛み込みで一瞬だけ閾値を割る、といったノイズをまとめる）。
+    """
+    raw = []
+    s = None
+    for i in range(len(t)):
+        on = fmag[i] >= thr
+        if on and s is None:
+            s = i
+        elif not on and s is not None:
+            raw.append([s, i - 1])
+            s = None
+    if s is not None:
+        raw.append([s, len(t) - 1])
+    # 近接区間を連結
+    merged = []
+    for seg in raw:
+        if merged and t[seg[0]] - t[merged[-1][1]] <= merge_gap:
+            merged[-1][1] = seg[1]
+        else:
+            merged.append(seg)
+    return [(a, b) for a, b in merged if t[b] - t[a] >= min_dur]
+
+
+def analyze_segments(d, thr):
+    """接触区間の統計・空中ベースラインを算出して文字列で返す。"""
+    t, F = d['t_s'], d['Fmag_N']
+    segs = detect_segments(t, F, thr)
+    # 空中（非接触）ベースライン: 閾値未満サンプルの |F| 中央値
+    air = [F[i] for i in range(len(t)) if F[i] < thr]
+    air_med = _median(air)
+    lines = []
+    lines.append('--- 接触区間の解析 (閾値 |F| >= %.1f N) ---' % thr)
+    lines.append('空中ベースライン |F| 中央値 : %.2f N '
+                 '（これが大きいと姿勢による重力オフセットの疑い）' % air_med)
+    if not segs:
+        lines.append('接触区間は検出されませんでした。')
+        return lines, segs
+    lines.append('%3s  %8s %8s %6s  %7s %7s  %7s  %8s' %
+                 ('#', 't開始', 't終了', '継続s', '平均|F|', '最大|F|', '平均Fy', '平均Mx'))
+    tot_contact = 0.0
+    for k, (a, b) in enumerate(segs, 1):
+        dur = t[b] - t[a]
+        tot_contact += dur
+        seg = range(a, b + 1)
+        fm = [F[i] for i in seg]
+        fy = [d['fy_N'][i] for i in seg]
+        mx = [d['mx_Nm'][i] for i in seg]
+        lines.append('%3d  %8.1f %8.1f %6.1f  %7.2f %7.2f  %7.2f  %8.3f' %
+                     (k, t[a], t[b], dur, sum(fm) / len(fm), max(fm),
+                      sum(fy) / len(fy), sum(mx) / len(mx)))
+    span = (t[-1] - t[0]) or 1.0
+    lines.append('接触区間 %d 個 / 合計接触 %.1f s (%.0f%%) / 空中 %.1f s' %
+                 (len(segs), tot_contact, 100.0 * tot_contact / span, span - tot_contact))
+    return lines, segs
+
+
 def main():
     ap = argparse.ArgumentParser(
         description='force_log_*.csv から力/モーメントの時系列グラフを作る')
@@ -142,6 +210,10 @@ def main():
                     help='画面表示せず PNG 保存のみ')
     ap.add_argument('--contact', type=float, default=None,
                     help='この[N]以上を加工区間として薄く塗る 例 3.0')
+    ap.add_argument('--seg-thr', type=float, default=1.0,
+                    help='接触区間の判定しきい値[N]（既定 1.0）。区間ごとの統計を端末に表示')
+    ap.add_argument('--no-seg', action='store_true',
+                    help='接触区間の解析（区間ごと統計）を表示しない')
     args = ap.parse_args()
 
     here = os.path.dirname(os.path.abspath(__file__))
@@ -164,6 +236,13 @@ def main():
     print('最大 |M| : %.3f N*m (t=%.1fs)' % (s['mmax'], s['mmax_t']))
     print('平均 |F| : %.2f N' % s['fmean'])
 
+    # 接触区間ごとの統計（研磨で「どこがどれだけ噛んだか」を数値で把握）
+    if not args.no_seg:
+        seg_lines, _ = analyze_segments(d, args.seg_thr)
+        print()
+        for ln in seg_lines:
+            print(ln)
+
     try:
         import matplotlib
         if args.no_show:
@@ -173,9 +252,12 @@ def main():
         print('matplotlib がありません。 pip install matplotlib を実行してください。')
         return 3
 
+    # --contact 指定があればその値で、無ければ接触判定しきい値で加工区間を塗る
+    shade_thr = args.contact if args.contact is not None else (
+        None if args.no_seg else args.seg_thr)
     title = '%s   |   max|F|=%.1fN  max|M|=%.2fN*m  (%.0fs)' % (
         os.path.basename(path), s['fmax'], s['mmax'], s['dur'])
-    fig = make_figure(d, s, title, contact=args.contact)
+    fig = make_figure(d, s, title, contact=shade_thr)
 
     png = os.path.splitext(path)[0] + '.png'
     fig.savefig(png, dpi=120)

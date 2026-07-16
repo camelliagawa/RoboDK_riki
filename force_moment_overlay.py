@@ -68,7 +68,8 @@ MOMENT_COLOR  = [0.15, 0.5, 1.0]    # モーメント = 青
 FORCE_DEADBAND  = 0.3    # [N]    これ未満は非表示（ノイズ抑制）
 MOMENT_DEADBAND = 0.02   # [N*m]  これ未満は非表示
 MAX_ARROW_LEN   = 250.0  # [mm]   矢印長さの上限（振り切れ防止）
-UPDATE_RATE     = 10     # [Hz]   更新レート（重ければ下げる。高すぎるとRoboDK APIが不安定に）
+UPDATE_RATE     = 10     # [Hz]   RoboDK連携時の更新レート（高すぎるとRoboDK APIが不安定に）
+HEADLESS_RATE   = 50     # [Hz]   --no-robodk 記録のみモードのサンプリング（RoboDK制約が無いので高めに）
 EMA_ALPHA       = 0.4    # 0<..<=1  表示のローパス（1で無効）
 ACTIVE_ONLY_WHEN_MOVING = True   # True: ロボット動作中のみ表示（自動スタート）
 
@@ -331,9 +332,9 @@ def main_headless():
     log_path = LOG_PATH or _make_log_path()
     logger = ForceLogger(log_path)
     print('CSV記録先:', log_path)
-    print('記録開始（ロボットを動かしてください。終了は Ctrl+C）')
+    print('記録開始（ロボットを動かしてください。終了は Ctrl+C）  サンプリング %g Hz' % HEADLESS_RATE)
 
-    dt = 1.0 / UPDATE_RATE
+    dt = 1.0 / HEADLESS_RATE
     t_start = time.time()
     log_count = 0
     try:
@@ -527,6 +528,9 @@ if __name__ == '__main__':
                     help='RoboDKを使わずセンサ読み取り＋CSV記録のみ（ペンダントでロボットを動かす構成向け。常時記録）')
     ap.add_argument('--no-open', action='store_true',
                     help='保存後にエクスプローラーでCSVフォルダを開かない')
+    ap.add_argument('--rate', type=float,
+                    help='サンプリング周波数[Hz]（既定: 記録のみ %g / RoboDK連携 %g）'
+                         % (HEADLESS_RATE, UPDATE_RATE))
     args = ap.parse_args()
 
     # コマンドライン引数で冒頭パラメータを上書き（ファイルを編集せずに切替できる）
@@ -551,6 +555,9 @@ if __name__ == '__main__':
         USE_ROBODK = False
     if args.no_open:
         OPEN_FOLDER_ON_SAVE = False
+    if args.rate:
+        UPDATE_RATE = args.rate
+        HEADLESS_RATE = args.rate
 
     if USE_ROBODK:
         main()
