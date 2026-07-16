@@ -53,6 +53,48 @@ def load_log(path):
     return cols
 
 
+def _interp(x, xs, ys):
+    """xs（昇順）に対する ys を x で線形補間。範囲外は端値で外挿。"""
+    n = len(xs)
+    if n == 0:
+        return 0.0
+    if x <= xs[0]:
+        return ys[0]
+    if x >= xs[-1]:
+        return ys[-1]
+    lo, hi = 0, n - 1
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if xs[mid] <= x:
+            lo = mid
+        else:
+            hi = mid
+    span = xs[hi] - xs[lo]
+    if span <= 0:
+        return ys[lo]
+    r = (x - xs[lo]) / span
+    return ys[lo] + r * (ys[hi] - ys[lo])
+
+
+def apply_baseline(d, base, shift=0.0):
+    """空運転(base)の各成分を時刻で補間して d から差し引き、重力/姿勢オフセットを除去する。
+
+    両方とも「プログラム開始」を起点に記録している前提（同じkenmaなので時間軸が揃う）。
+    ズレがあれば shift[s] で base 側の時刻をずらして合わせる。
+    差し引き後に Fmag/Mmag を再計算する。
+    """
+    bt = base['t_s']
+    comps = ('fx_N', 'fy_N', 'fz_N', 'mx_Nm', 'my_Nm', 'mz_Nm')
+    for i, t in enumerate(d['t_s']):
+        for k in comps:
+            d[k][i] -= _interp(t + shift, bt, base[k])
+        fx, fy, fz = d['fx_N'][i], d['fy_N'][i], d['fz_N'][i]
+        mx, my, mz = d['mx_Nm'][i], d['my_Nm'][i], d['mz_Nm'][i]
+        d['Fmag_N'][i] = (fx * fx + fy * fy + fz * fz) ** 0.5
+        d['Mmag_Nm'][i] = (mx * mx + my * my + mz * mz) ** 0.5
+    return d
+
+
 def _argmax(values):
     """最大値のインデックスと値を返す。空なら (None, None)。"""
     if not values:
@@ -214,6 +256,10 @@ def main():
                     help='接触区間の判定しきい値[N]（既定 1.0）。区間ごとの統計を端末に表示')
     ap.add_argument('--no-seg', action='store_true',
                     help='接触区間の解析（区間ごと統計）を表示しない')
+    ap.add_argument('--baseline', metavar='AIR_CSV',
+                    help='空運転CSVを時刻で差し引き、重力/姿勢オフセットを除去して表示')
+    ap.add_argument('--baseline-shift', type=float, default=0.0,
+                    help='空運転の時刻ズレ補正[s]（両者の開始点が合わないとき）')
     args = ap.parse_args()
 
     here = os.path.dirname(os.path.abspath(__file__))
@@ -227,6 +273,21 @@ def main():
     if not d['t_s']:
         print('データ行がありません:', path)
         return 2
+
+    baseline_note = ''
+    if args.baseline:
+        if not os.path.isfile(args.baseline):
+            print('空運転CSVが見つかりません:', args.baseline)
+            return 2
+        base = load_log(args.baseline)
+        if not base['t_s']:
+            print('空運転CSVにデータがありません:', args.baseline)
+            return 2
+        apply_baseline(d, base, shift=args.baseline_shift)
+        baseline_note = ' [空運転差引済み]'
+        print('空運転を差し引きました:', os.path.basename(args.baseline),
+              '(shift=%.2fs)' % args.baseline_shift)
+
     s = summarize(d)
 
     # 統計を端末に表示
@@ -255,11 +316,12 @@ def main():
     # --contact 指定があればその値で、無ければ接触判定しきい値で加工区間を塗る
     shade_thr = args.contact if args.contact is not None else (
         None if args.no_seg else args.seg_thr)
-    title = '%s   |   max|F|=%.1fN  max|M|=%.2fN*m  (%.0fs)' % (
-        os.path.basename(path), s['fmax'], s['mmax'], s['dur'])
+    title = '%s%s   |   max|F|=%.1fN  max|M|=%.2fN*m  (%.0fs)' % (
+        os.path.basename(path), baseline_note, s['fmax'], s['mmax'], s['dur'])
     fig = make_figure(d, s, title, contact=shade_thr)
 
-    png = os.path.splitext(path)[0] + '.png'
+    suffix = '_baselined' if args.baseline else ''
+    png = os.path.splitext(path)[0] + suffix + '.png'
     fig.savefig(png, dpi=120)
     print('グラフを保存 :', png)
 

@@ -5,7 +5,10 @@ rem  Double-click the desktop shortcut to run.
 rem   - Do NOT touch the tool during "zero measuring" (tare).
 rem   - Move the robot with the teach pendant while logging.
 rem   - Press Ctrl+C in this window to stop and save the CSV.
+rem  --live : show a real-time force/moment graph while logging.
+rem  --plot : open the full graph automatically after you stop.
+rem  (both need matplotlib: pip install matplotlib)
 rem  Keep this .bat in the repo folder (next to
 rem  force_moment_overlay.py); put its shortcut on the Desktop.
 rem ============================================================
-powershell -NoExit -ExecutionPolicy Bypass -Command "Set-Location -LiteralPath '%~dp0'; python force_moment_overlay.py --no-robodk --log"
+powershell -NoExit -ExecutionPolicy Bypass -Command "Set-Location -LiteralPath '%~dp0'; python force_moment_overlay.py --no-robodk --log --live --plot"

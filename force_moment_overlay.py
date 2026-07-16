@@ -20,6 +20,7 @@ import time
 import math
 import csv
 import struct
+from collections import deque
 from datetime import datetime
 
 # RoboDK のボタンから起動しても隣の dynpick_sensor.py を読めるよう、
@@ -243,6 +244,10 @@ class ForceLogger:
 
 # 保存後に、CSV のあるフォルダをエクスプローラーで開く（ファイルを選択した状態）。
 OPEN_FOLDER_ON_SAVE = True
+# 保存後に plot_force_log.py で自動的にグラフを開く（--plot）。有効時はエクスプローラー表示より優先。
+PLOT_ON_SAVE = False
+# 記録中に力/モーメントをリアルタイム表示する（--live）。
+LIVE_PLOT = False
 
 def _reveal_in_explorer(path):
     """保存した CSV をエクスプローラーで選択表示する。失敗しても記録には影響しない。
@@ -312,6 +317,108 @@ def _joints_list(robot):
         return [float(j[i, 0]) for i in range(n)]
 
 
+# ---------- リアルタイム表示 ----------
+LIVE_WINDOW_S = 30.0    # ライブグラフに表示する直近秒数
+LIVE_FPS      = 12.0    # ライブグラフの再描画頻度[Hz]（サンプリングとは独立）
+
+class LivePlot:
+    """記録しながら 力/モーメントを直近 LIVE_WINDOW_S 秒だけ流し表示する簡易ライブグラフ。
+
+    matplotlib の対話モード（ion）で、サンプリングループを止めずに一定間隔で再描画する。
+    matplotlib が無ければ生成に失敗するので、呼び出し側で握りつぶして端末表示のみに退避する。
+    """
+
+    COL = {'x': '#D55E00', 'y': '#009E73', 'z': '#0072B2', 'mag': '#222222'}
+
+    def __init__(self, window_s=LIVE_WINDOW_S):
+        import matplotlib.pyplot as plt
+        self.plt = plt
+        self.window = window_s
+        self._last_draw = 0.0
+        self._interval = 1.0 / LIVE_FPS
+        self.t = deque()
+        self.buf = {k: deque() for k in
+                    ('fx', 'fy', 'fz', 'fm', 'mx', 'my', 'mz', 'mm')}
+        plt.ion()
+        self.fig, (self.ax1, self.ax2) = plt.subplots(2, 1, sharex=True,
+                                                       figsize=(10, 6))
+        self.fig.canvas.manager.set_window_title('DynPick リアルタイム 力/モーメント')
+        self.lines = {}
+        for key, ax, comps, ylab in (
+                ('F', self.ax1, (('fx', 'Fx', 'x'), ('fy', 'Fy', 'y'),
+                                 ('fz', 'Fz', 'z'), ('fm', '|F|', 'mag')), 'Force [N]'),
+                ('M', self.ax2, (('mx', 'Mx', 'x'), ('my', 'My', 'y'),
+                                 ('mz', 'Mz', 'z'), ('mm', '|M|', 'mag')), 'Moment [N*m]')):
+            for buf_key, label, ckey in comps:
+                lw = 2.0 if ckey == 'mag' else 1.2
+                (self.lines[buf_key],) = ax.plot([], [], color=self.COL[ckey],
+                                                 lw=lw, label=label)
+            ax.set_ylabel(ylab)
+            ax.grid(True, color='#CCCCCC', lw=0.6)
+            ax.legend(loc='upper left', ncol=4, framealpha=0.9)
+        self.ax2.set_xlabel('Time [s]')
+        self.ax1.set_title('直近 %.0f 秒（記録は継続中。終了は端末で Ctrl+C）' % window_s)
+        self.fig.tight_layout()
+        self.closed = False
+        self.fig.canvas.mpl_connect('close_event', self._on_close)
+        self.fig.show()
+
+    def _on_close(self, _evt):
+        self.closed = True
+
+    def push(self, t, f, m):
+        fx, fy, fz = f
+        mx, my, mz = m
+        self.t.append(t)
+        self.buf['fx'].append(fx); self.buf['fy'].append(fy); self.buf['fz'].append(fz)
+        self.buf['fm'].append(math.sqrt(fx * fx + fy * fy + fz * fz))
+        self.buf['mx'].append(mx); self.buf['my'].append(my); self.buf['mz'].append(mz)
+        self.buf['mm'].append(math.sqrt(mx * mx + my * my + mz * mz))
+        # 窓外の古いサンプルを捨てる
+        while self.t and (t - self.t[0]) > self.window:
+            self.t.popleft()
+            for b in self.buf.values():
+                b.popleft()
+
+    def maybe_draw(self, now):
+        if self.closed or (now - self._last_draw) < self._interval:
+            return
+        self._last_draw = now
+        ts = list(self.t)
+        if len(ts) < 2:
+            return
+        for key, line in self.lines.items():
+            line.set_data(ts, list(self.buf[key]))
+        self.ax1.set_xlim(ts[0], ts[-1])
+        for ax in (self.ax1, self.ax2):
+            ax.relim(); ax.autoscale_view(scalex=False, scaley=True)
+        try:
+            self.fig.canvas.draw_idle()
+            self.fig.canvas.flush_events()
+        except Exception:
+            self.closed = True
+
+    def close(self):
+        try:
+            self.plt.ioff()
+        except Exception:
+            pass
+
+
+def _launch_plot(csv_path):
+    """記録終了後、保存した CSV を plot_force_log.py で開く（別プロセス・非ブロッキング）。"""
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        script = os.path.join(here, 'plot_force_log.py')
+        if not os.path.isfile(script) or not csv_path or not os.path.isfile(csv_path):
+            return
+        import subprocess
+        subprocess.Popen([sys.executable, script, os.path.abspath(csv_path)],
+                         cwd=here)
+    except Exception:
+        pass
+
+
 def main_headless():
     """RoboDK を使わず、DynPick センサの値を CSV に記録するだけのモード。
 
@@ -334,6 +441,16 @@ def main_headless():
     print('CSV記録先:', log_path)
     print('記録開始（ロボットを動かしてください。終了は Ctrl+C）  サンプリング %g Hz' % HEADLESS_RATE)
 
+    # ライブグラフ（--live）。matplotlib が無い/失敗しても記録は続ける。
+    live = None
+    if LIVE_PLOT:
+        try:
+            live = LivePlot()
+            print('リアルタイム表示: ON（別ウィンドウ）')
+        except Exception as e:
+            print('リアルタイム表示は使えませんでした（matplotlib未導入など）:', e)
+            live = None
+
     dt = 1.0 / HEADLESS_RATE
     t_start = time.time()
     log_count = 0
@@ -341,14 +458,18 @@ def main_headless():
         while True:
             t0 = time.time()
             fx, fy, fz, mx, my, mz = read_wrench(t0)
+            ts = t0 - t_start
             if log_count % LOG_EVERY == 0:
-                logger.write(t0 - t_start, (fx, fy, fz, mx, my, mz), None, True)
+                logger.write(ts, (fx, fy, fz, mx, my, mz), None, True)
             log_count += 1
             # 端末に簡易ライブ表示（1行を上書き更新）
             fmag = math.sqrt(fx * fx + fy * fy + fz * fz)
             print('\r t=%6.1fs  F=(%6.2f,%6.2f,%6.2f)N |F|=%5.2f  '
                   'M=(%6.3f,%6.3f,%6.3f)Nm   ' %
-                  (t0 - t_start, fx, fy, fz, fmag, mx, my, mz), end='')
+                  (ts, fx, fy, fz, fmag, mx, my, mz), end='')
+            if live is not None:
+                live.push(ts, (fx, fy, fz), (mx, my, mz))
+                live.maybe_draw(t0)
             elapsed = time.time() - t0
             if elapsed < dt:
                 time.sleep(dt - elapsed)
@@ -356,8 +477,14 @@ def main_headless():
         pass
     finally:
         logger.close()
+        if live is not None:
+            live.close()
         print('\nCSV記録を保存しました（%d 行）: %s' % (logger.rows, logger.path))
-        _reveal_in_explorer(logger.path)
+        if PLOT_ON_SAVE:
+            print('グラフを表示します（plot_force_log.py）…')
+            _launch_plot(logger.path)
+        else:
+            _reveal_in_explorer(logger.path)
         if _SENSOR is not None:
             _SENSOR.close()
 
@@ -531,6 +658,10 @@ if __name__ == '__main__':
     ap.add_argument('--rate', type=float,
                     help='サンプリング周波数[Hz]（既定: 記録のみ %g / RoboDK連携 %g）'
                          % (HEADLESS_RATE, UPDATE_RATE))
+    ap.add_argument('--live', action='store_true',
+                    help='記録中に力/モーメントをリアルタイム表示（別ウィンドウ・要matplotlib）')
+    ap.add_argument('--plot', action='store_true',
+                    help='記録終了後に自動でグラフ(plot_force_log.py)を開く')
     args = ap.parse_args()
 
     # コマンドライン引数で冒頭パラメータを上書き（ファイルを編集せずに切替できる）
@@ -558,6 +689,10 @@ if __name__ == '__main__':
     if args.rate:
         UPDATE_RATE = args.rate
         HEADLESS_RATE = args.rate
+    if args.live:
+        LIVE_PLOT = True
+    if args.plot:
+        PLOT_ON_SAVE = True
 
     if USE_ROBODK:
         main()
