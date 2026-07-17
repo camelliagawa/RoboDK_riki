@@ -96,6 +96,21 @@ BASE_OFFSET_TOOL = [0.0, 0.0, 0.0]
 LOG_CSV   = False   # True: 力/モーメントをCSVに記録（--log でも有効化）
 LOG_PATH  = ''      # 保存先パス。'' なら force_log_日時.csv をスクリプトと同じフォルダに自動生成
 LOG_EVERY = 1       # 何サンプルごとに1行記録するか（1=毎サンプル。長時間運用で間引くなら 2,5.. ）
+
+# --- 過負荷監視（工具・ワーク保護） -------------------------------------
+# |F|[N] がしきい値以上に一定サンプル連続で達したら「発報」する。発報時に端末アラーム＋
+# アラームログ(sidecar)＋（RELAY_PORT 指定時）USBリレーの接点をON。
+# ⚠ これはソフト監視で「安全定格」ではない。人身安全は必ずハード非常停止（安全回路）で担保し、
+#    本機能は押し過ぎ・突入から刃/砥石/センサを守るプロセス保護として使うこと（--force-limit で有効化）。
+FORCE_LIMIT      = None  # [N] しきい値。None で無効（--force-limit N で設定）
+FORCE_LIMIT_HOLD = 3     # 連続何サンプル超過で発報するか（誤検知防止のデバウンス。3=約60ms@50Hz）
+FORCE_LIMIT_MASK = 0.0   # [s] 記録開始からこの秒数は監視しない（突入過渡での誤検知を避ける）
+FORCE_LIMIT_LATCH = False  # True: 一度発報したら解除（再起動）まで保持＝リレーON維持（E-stop/HOLD向け）
+RELAY_PORT       = ''    # USBリレーのシリアルポート 例 'COM5'。'' で出力なし（アラームのみ）
+RELAY_BAUD       = 9600  # USBリレーのボーレート（LCUS系は 9600）
+# LCUS-1 等の一般的な5V USBリレー（CH340系）のON/OFFコマンド。別型番なら書き換える。
+RELAY_ON_BYTES   = bytes((0xA0, 0x01, 0x01, 0xA2))
+RELAY_OFF_BYTES  = bytes((0xA0, 0x01, 0x00, 0xA1))
 # =====================================================
 
 
@@ -238,6 +253,127 @@ class ForceLogger:
     def close(self):
         try:
             self._f.close()
+        except Exception:
+            pass
+
+
+class SerialRelay:
+    """USBシリアルリレー（LCUS系 CH340 等）の接点を ON/OFF する薄いラッパ。
+
+    既定の RELAY_ON_BYTES / RELAY_OFF_BYTES は一般的な1ch 5Vリレーのコマンド。
+    別型番なら冒頭のバイト列を書き換える。open に失敗しても記録は続行する（監視は
+    アラームのみになる）。pyserial を使う（記録用に既に依存済み）。
+    """
+
+    def __init__(self, port, baud=RELAY_BAUD,
+                 on_bytes=RELAY_ON_BYTES, off_bytes=RELAY_OFF_BYTES):
+        import serial   # pyserial（DynPick で既に使用）
+        self._ser = serial.Serial(port, baud, timeout=0.2)
+        self._on = on_bytes
+        self._off = off_bytes
+        self.off()   # 起動時は必ず接点OFF（安全側）
+
+    def on(self):
+        try:
+            self._ser.write(self._on)
+            self._ser.flush()
+        except Exception:
+            pass
+
+    def off(self):
+        try:
+            self._ser.write(self._off)
+            self._ser.flush()
+        except Exception:
+            pass
+
+    def close(self):
+        try:
+            self.off()
+            self._ser.close()
+        except Exception:
+            pass
+
+
+class ForceLimitMonitor:
+    """|F| の過負荷監視（工具・ワーク保護）。1サンプルずつ update() で評価する。
+
+    - しきい値以上が hold サンプル連続したら「発報」（立ち上がりエッジで1回）。
+    - 発報で: 端末アラーム(ビープ付)＋アラームログ(sidecar CSV)＋（あれば）リレーON。
+    - latch=False: |F| がしきい値未満に戻ると復帰し、リレーはOFF（次の超過で再発報）。
+      latch=True : 一度発報したら保持（リレーON維持）。E-stop/HOLD 用の安全側。
+    ⚠ ソフト監視なので安全定格ではない。人身安全はハード非常停止で担保すること。
+    """
+
+    def __init__(self, limit_N, hold=3, mask_s=0.0, latch=False,
+                 alarm_path=None, relay=None):
+        self.limit = limit_N
+        self.hold = max(1, int(hold))
+        self.mask_s = mask_s
+        self.latch = latch
+        self.alarm_path = alarm_path
+        self.relay = relay
+        self.count = 0        # 連続超過サンプル数
+        self.active = False   # いま発報状態か（リレーON中か）
+        self.events = 0       # 発報回数
+        self._af = None       # アラームログのファイルハンドル（遅延生成）
+
+    def enabled(self):
+        return self.limit is not None
+
+    def update(self, ts, fmag, iso=None):
+        """1サンプル評価。新規に発報した瞬間だけ True を返す。"""
+        if self.limit is None or ts < self.mask_s:
+            return False
+        over = fmag >= self.limit
+        self.count = self.count + 1 if over else 0
+
+        if over and self.count >= self.hold and not self.active:
+            # 立ち上がり発報
+            self.active = True
+            self.events += 1
+            if self.relay is not None:
+                self.relay.on()
+            self._log(ts, fmag, iso, 'TRIP')
+            self._alarm(ts, fmag)
+            return True
+
+        if not over and self.active and not self.latch:
+            # 平常復帰（latch時は保持）
+            self.active = False
+            if self.relay is not None:
+                self.relay.off()
+            self._log(ts, fmag, iso, 'clear')
+        return False
+
+    def _alarm(self, ts, fmag):
+        # \n で改行してから出す（\r の1行更新に上書きされないように）。\a はビープ。
+        state = ' [LATCH: 解除まで保持]' if self.latch else ''
+        relay = ' → リレーON' if self.relay is not None else ''
+        print('\a\n*** 過負荷検知 |F|=%.1fN ≥ しきい値%.1fN  (t=%.1fs)%s%s ***'
+              % (fmag, self.limit, ts, relay, state))
+
+    def _log(self, ts, fmag, iso, event):
+        if not self.alarm_path:
+            return
+        try:
+            if self._af is None:
+                self._af = open(self.alarm_path, 'w', newline='', encoding='utf-8')
+                w = csv.writer(self._af)
+                w.writerow(['time_iso', 't_s', 'Fmag_N', 'limit_N', 'event'])
+                self._aw = w
+            self._aw.writerow([iso or datetime.now().isoformat(timespec='milliseconds'),
+                               '%.3f' % ts, '%.4f' % fmag, '%.4f' % self.limit, event])
+            self._af.flush()
+        except Exception:
+            pass
+
+    def close(self):
+        if self.relay is not None:
+            self.relay.close()
+        try:
+            if self._af is not None:
+                self._af.close()
         except Exception:
             pass
 
@@ -483,6 +619,27 @@ def main_headless():
             print('リアルタイム表示は使えませんでした（matplotlib未導入など）:', e)
             live = None
 
+    # 過負荷監視（--force-limit）。リレーが開けなくても記録・監視は続ける（アラームのみ）。
+    monitor = None
+    if FORCE_LIMIT is not None:
+        relay = None
+        if RELAY_PORT:
+            try:
+                relay = SerialRelay(RELAY_PORT)
+                print('過負荷時のリレー出力: ON（ポート %s）' % RELAY_PORT)
+            except Exception as e:
+                print('リレーを開けませんでした（アラームのみで続行）:', e)
+                relay = None
+        alarm_path = os.path.splitext(log_path)[0] + '_alarms.csv'
+        monitor = ForceLimitMonitor(FORCE_LIMIT, hold=FORCE_LIMIT_HOLD,
+                                    mask_s=FORCE_LIMIT_MASK, latch=FORCE_LIMIT_LATCH,
+                                    alarm_path=alarm_path, relay=relay)
+        print('過負荷監視: |F| ≥ %.1fN が %d サンプル連続で発報（%s%s%s）'
+              % (FORCE_LIMIT, FORCE_LIMIT_HOLD,
+                 'マスク%.0fs / ' % FORCE_LIMIT_MASK if FORCE_LIMIT_MASK else '',
+                 'ラッチ保持' if FORCE_LIMIT_LATCH else '自動復帰',
+                 ' / リレー出力' if relay is not None else ' / アラームのみ'))
+
     dt = 1.0 / HEADLESS_RATE
     t_start = time.time()
     log_count = 0
@@ -496,6 +653,9 @@ def main_headless():
             log_count += 1
             # 端末に簡易ライブ表示（1行を上書き更新）
             fmag = math.sqrt(fx * fx + fy * fy + fz * fz)
+            # 過負荷監視（生の |F| で評価＝スパイクを取りこぼさない）
+            if monitor is not None:
+                monitor.update(ts, fmag)
             print('\r t=%6.1fs  F=(%6.2f,%6.2f,%6.2f)N |F|=%5.2f  '
                   'M=(%6.3f,%6.3f,%6.3f)Nm   ' %
                   (ts, fx, fy, fz, fmag, mx, my, mz), end='')
@@ -514,6 +674,10 @@ def main_headless():
         logger.close()
         if live is not None:
             live.close()
+        if monitor is not None:
+            if monitor.events:
+                print('過負荷 発報 %d 回（記録: %s）' % (monitor.events, monitor.alarm_path))
+            monitor.close()
         print('\nCSV記録を保存しました（%d 行）: %s' % (logger.rows, logger.path))
         if PLOT_ON_SAVE:
             print('グラフを表示します（plot_force_log.py）…')
@@ -697,6 +861,17 @@ if __name__ == '__main__':
                     help='記録中に力/モーメントをリアルタイム表示（別ウィンドウ・要matplotlib）')
     ap.add_argument('--plot', action='store_true',
                     help='記録終了後に自動でグラフ(plot_force_log.py)を開く')
+    ap.add_argument('--force-limit', type=float, metavar='N',
+                    help='過負荷監視（工具保護）: |F|[N] がこの値以上で発報。'
+                         '端末アラーム＋アラームログ＋（--relay-port指定時）リレーON')
+    ap.add_argument('--force-limit-hold', type=int, metavar='K',
+                    help='発報までの連続超過サンプル数（デバウンス。既定 %d）' % FORCE_LIMIT_HOLD)
+    ap.add_argument('--force-limit-mask', type=float, metavar='S',
+                    help='記録開始からS秒は監視しない（突入過渡での誤検知回避。既定 %g）' % FORCE_LIMIT_MASK)
+    ap.add_argument('--force-limit-latch', action='store_true',
+                    help='一度発報したら解除（再起動）まで保持＝リレーON維持（E-stop/HOLD向け）')
+    ap.add_argument('--relay-port', metavar='COMx',
+                    help='USBリレーのシリアルポート（例 COM5）。指定時、発報でリレー接点をON')
     args = ap.parse_args()
 
     # コマンドライン引数で冒頭パラメータを上書き（ファイルを編集せずに切替できる）
@@ -728,6 +903,16 @@ if __name__ == '__main__':
         LIVE_PLOT = True
     if args.plot:
         PLOT_ON_SAVE = True
+    if args.force_limit is not None:
+        FORCE_LIMIT = args.force_limit
+    if args.force_limit_hold is not None:
+        FORCE_LIMIT_HOLD = args.force_limit_hold
+    if args.force_limit_mask is not None:
+        FORCE_LIMIT_MASK = args.force_limit_mask
+    if args.force_limit_latch:
+        FORCE_LIMIT_LATCH = True
+    if args.relay_port:
+        RELAY_PORT = args.relay_port
 
     if USE_ROBODK:
         main()

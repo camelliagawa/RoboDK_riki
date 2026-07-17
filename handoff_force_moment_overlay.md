@@ -139,7 +139,7 @@ FANUC ロボットで包丁の研磨（TORMEK T-8）を行う際に、**DynPick 
 - どちらのPCでも見られるようにするため、**両PCに matplotlib を入れておく**（記録用PCが未導入なら `pip install matplotlib`）。
 
 ### 起動オプション（ファイルを編集せず切替）
-`--demo` / `--port` / `--baud` / `--robot` / `--always-on` / `--detect busy|joints|both` / `--log` / `--log-path` / `--no-robodk` / `--no-open` / `--rate` / `--live` / `--plot`
+`--demo` / `--port` / `--baud` / `--robot` / `--always-on` / `--detect busy|joints|both` / `--log` / `--log-path` / `--no-robodk` / `--no-open` / `--rate` / `--live` / `--plot` / `--force-limit` / `--force-limit-hold` / `--force-limit-mask` / `--force-limit-latch` / `--relay-port`
 
 - `--live` … 記録しながら**リアルタイムで力/モーメントを別ウィンドウ表示**（直近30秒を流し表示）。要 matplotlib。
   終了はグラフ窓の **STOPボタン / 窓を閉じる / q キー**（GUIにフォーカスがあると Ctrl+C が効かないため。端末での Ctrl+C も可）。
@@ -148,6 +148,29 @@ FANUC ロボットで包丁の研磨（TORMEK T-8）を行う際に、**DynPick 
 - `--no-open` … 記録終了後にCSVフォルダをエクスプローラーで自動表示しない（既定は自動で開く）。
 - `--rate` … サンプリング周波数[Hz]。既定は **記録のみ(`--no-robodk`)=50Hz** / RoboDK連携=10Hz。
 - ※ `record_force.bat` は既定で `--no-robodk --log --live --plot`（記録＋リアルタイム表示＋終了後グラフ）。
+
+### 過負荷監視（工具・ワーク保護）— `--force-limit`
+押し過ぎ・突入で刃/砥石/センサを守るための**ソフト監視**（`--no-robodk` の記録ループに実装）。`|F|`[N] がしきい値以上に一定サンプル連続で達したら**発報**する。
+- `--force-limit N` … `|F| ≥ N`[N] で発報。**端末アラーム(ビープ)＋ `<CSV名>_alarms.csv`（時刻・|F|・event=TRIP/clear）＋（`--relay-port` 指定時）USBリレー接点ON**。
+- `--force-limit-hold K` … 発報までの連続超過サンプル数（デバウンス。既定3＝約60ms@50Hz。単発ノイズ誤検知を防ぐ）。
+- `--force-limit-mask S` … 記録開始からS秒は監視しない（**突入過渡での誤検知回避**。開始直後に~25Nの突入がある場合に有効）。
+- `--force-limit-latch` … 一度発報したら**解除（再起動）まで保持**＝リレーON維持。E-stop/HOLD 用の安全側（既定は自動復帰：|F|が下がるとリレーOFF）。
+- `--relay-port COMx` … USBリレーのシリアルポート。指定時、発報でリレー接点をON。未指定なら**アラームのみ**（ハード不要で即使える）。
+- **しきい値の目安**（実測: 通常の当たり中央4〜11N・正常ピーク~25N突入含む / 異常=40N級スパイク）→ まず `--force-limit 15〜20 --force-limit-hold 3 --force-limit-mask 3` あたりから。
+- ⚠ **これは安全定格ではない**（PC＋USB＋Windowsの非決定的遅延）。**人身の安全は必ずハード非常停止（コントローラの安全回路）で担保**し、本機能は工具/ワーク保護のプロセス保護として使うこと。
+
+#### リレー配線（工具保護の推奨構成）
+```
+DynPick ─USB─▶ PC(force_moment_overlay.py, --force-limit) ─→ 発報でリレーON
+                                     │(USBリレーの乾接点)
+                                     ▼
+                    FANUC「HOLD入力(UOP UI[2])」or デジタル入力(DI)
+                                     ▼
+                          ロボット制御停止（HOLD=減速停止・復帰可）
+```
+- **USBリレー**: LCUS-1 系（1ch・5V・CH340のUSBシリアル、数百〜千円台）。既定コマンド `ON=A0 01 01 A2 / OFF=A0 01 00 A1`（9600bps）を `force_moment_overlay.py` 冒頭 `RELAY_ON_BYTES/RELAY_OFF_BYTES` に実装済み。**別型番なら書き換える**。
+- **接点の入れ先**: 工具保護なら **HOLD入力(UI[2])** が最適（減速停止・復帰可、TP改造不要）。DI＋TP側 `MONITOR`/割込みで `PAUSE`/`ABORT` でも可。
+- **フェイルセーフにするなら**: 断線でも止まるよう **NC接点＋`--force-limit-latch`**（＋必要なら極性反転）で配線。FANUCのI/O配線・入力有効化は**有資格者が実施**。
 
 ### `plot_force_log.py` のオプション
 - `--baseline 空運転.csv` … **空運転CSVを差し引き、重力/姿勢オフセットを除去**して表示（真の接触力を見る本命）。
@@ -248,7 +271,7 @@ FANUC ロボットで包丁の研磨（TORMEK T-8）を行う際に、**DynPick 
 
 ## 8. 関連ファイル
 
-- `force_moment_overlay.py` … 本体（記録 + RoboDK矢印 + DynPick接続 + `--no-robodk`）。
+- `force_moment_overlay.py` … 本体（記録 + RoboDK矢印 + DynPick接続 + `--no-robodk` + **過負荷監視 `--force-limit`**）。過負荷監視は `ForceLimitMonitor`（発報・デバウンス・ラッチ・sidecarログ）と `SerialRelay`（USBリレー出力）で実装。
 - `dynpick_sensor.py` … DynPick シリアル読み取り・LSB→N/Nm 換算。`python dynpick_sensor.py` でセルフテスト（HW不要）。
 - `plot_force_log.py` … CSV → 力/モーメント時系列グラフ（matplotlib）。**空運転差引(`--baseline*`)・左右サマリ(`--sides`)・自動ゼロ(`--auto-zero`)・操作パネル(`--panel`)・個別保存(`--save-split`)・デザイン設定(STYLE/`plot_config.json`)** を内蔵。関数: `make_figure`(線ハンドル返す)/`add_control_panel`/`apply_baseline`*/`estimate_baseline_shift`/`detect_phase_split`/`side_summary`/`auto_zero`/`save_axes_region`。
 - `plot_config.example.json` … デザイン変更のテンプレート。`plot_config.json` にコピーして編集（同フォルダ）。`plot_config.json` は Git管理外。
