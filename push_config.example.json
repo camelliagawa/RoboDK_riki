@@ -1,0 +1,11 @@
+{
+  "_comment": "押し込みスイープ試験の設定。push_config.json にコピーして CSV 名を実ファイルに合わせる。stroke_analyze.py --stiffness push_config.json で剛性 k(x) を同定する。各 csv は砥石停止で押し込み量を変えて録った1本（HaR/HaL 両面を含む）。",
+  "air": "air.csv",
+  "tests": [
+    {"push_mm": 2.0, "csv": "force_log_push20.csv"},
+    {"push_mm": 2.5, "csv": "force_log_push25.csv"},
+    {"push_mm": 3.0, "csv": "force_log_push30.csv"},
+    {"push_mm": 3.5, "csv": "force_log_push35.csv"},
+    {"push_mm": 4.0, "csv": "force_log_push40.csv"}
+  ]
+}
