@@ -832,6 +832,314 @@ def main():
             _SENSOR.close()
 
 
+class RecorderApp:
+    """記録用の操作パネル（Tkinter）。自動では始まらず、Start で計測開始する。
+
+    画面でできること:
+      - Start / Stop（計測開始・停止＆保存）
+      - 過負荷しきい値[N] の入力（計測中もその場で変更）
+      - アラーム ON/OFF（過負荷監視の有効/無効）
+      - ライブ表示 ON/OFF（既定OFF。ONで力/モーメントの時系列を同じ窓に表示）
+    センサ読み取り・記録・過負荷監視は Tk の after ループで回す（別スレッド不使用）。
+    """
+
+    def __init__(self, tk, ttk):
+        self.tk = tk
+        self.root = tk.Tk()
+        self.root.title('Force Recorder（DynPick 記録パネル）')
+        self.root.protocol('WM_DELETE_WINDOW', self.on_close)
+
+        self.recording = False
+        self.sensor = None
+        self.logger = None
+        self.monitor = None
+        self.relay = None
+        self.log_path = None
+        self.t_start = 0.0
+        self.rows = 0
+        self.buf = deque(maxlen=int(LIVE_WINDOW_S * HEADLESS_RATE) + 100)
+        self._sample_after = None
+        self._ui_after = None
+        self.canvas = None
+        self._fig = None
+
+        init_limit = FORCE_LIMIT if FORCE_LIMIT is not None else 20.0
+        self.var_limit = tk.StringVar(value='%g' % init_limit)
+        self.var_alarm = tk.BooleanVar(value=True)
+        self.var_live = tk.BooleanVar(value=False)   # 既定OFF
+        self.var_status = tk.StringVar(value='待機中 — Start を押すと零点測定して計測開始します')
+        self.var_read = tk.StringVar(value='|F| = ---  N')
+        self.var_info = tk.StringVar(value='')
+
+        self._build_ui(ttk)
+
+    def _build_ui(self, ttk):
+        tk = self.tk
+        pad = dict(padx=6, pady=4)
+        top = ttk.Frame(self.root)
+        top.pack(fill='x', **pad)
+
+        # 状態・読み値
+        ttk.Label(top, textvariable=self.var_status, font=('', 10, 'bold')
+                  ).grid(row=0, column=0, columnspan=4, sticky='w')
+        ttk.Label(top, textvariable=self.var_read, font=('', 20, 'bold')
+                  ).grid(row=1, column=0, columnspan=2, sticky='w', pady=(4, 4))
+        ttk.Label(top, textvariable=self.var_info).grid(
+            row=1, column=2, columnspan=2, sticky='e')
+
+        # Start / Stop
+        self.btn_start = ttk.Button(top, text='▶ Start', command=self.on_start)
+        self.btn_start.grid(row=2, column=0, sticky='ew', pady=6)
+        self.btn_stop = ttk.Button(top, text='■ Stop', command=self.on_stop,
+                                   state='disabled')
+        self.btn_stop.grid(row=2, column=1, sticky='ew', pady=6)
+        top.columnconfigure(0, weight=1)
+        top.columnconfigure(1, weight=1)
+
+        # 過負荷しきい値 + アラーム
+        ctl = ttk.LabelFrame(self.root, text='過負荷監視（工具・ワーク保護）')
+        ctl.pack(fill='x', **pad)
+        ttk.Label(ctl, text='しきい値 |F| ≥').grid(row=0, column=0, sticky='w', padx=6, pady=6)
+        ent = ttk.Entry(ctl, textvariable=self.var_limit, width=8)
+        ent.grid(row=0, column=1, sticky='w')
+        ent.bind('<Return>', lambda e: self._apply_limit())
+        ttk.Label(ctl, text='N').grid(row=0, column=2, sticky='w')
+        ttk.Button(ctl, text='適用', command=self._apply_limit).grid(
+            row=0, column=3, padx=6)
+        ttk.Checkbutton(ctl, text='アラーム ON', variable=self.var_alarm,
+                        command=self._on_alarm_toggle).grid(
+            row=0, column=4, padx=10, sticky='w')
+
+        # ライブ表示トグル
+        opt = ttk.Frame(self.root)
+        opt.pack(fill='x', **pad)
+        ttk.Checkbutton(opt, text='ライブ表示（時系列グラフ）', variable=self.var_live,
+                        command=self._on_live_toggle).pack(side='left')
+
+        # ライブグラフの置き場所（ONにしたとき生成して表示）
+        self.plot_frame = ttk.Frame(self.root)
+        self.plot_frame.pack(fill='both', expand=True, **pad)
+
+    # ---- しきい値・トグル ----
+    def _limit_value(self):
+        try:
+            return float(self.var_limit.get())
+        except ValueError:
+            return None
+
+    def _apply_limit(self):
+        v = self._limit_value()
+        if v is None:
+            self.var_info.set('しきい値が数値ではありません')
+            return
+        if self.monitor is not None and self.var_alarm.get():
+            self.monitor.limit = v
+            self.monitor.count = 0
+        self.var_info.set('しきい値 %.1fN を適用' % v)
+
+    def _on_alarm_toggle(self):
+        if self.monitor is None:
+            return
+        if self.var_alarm.get():
+            self.monitor.limit = self._limit_value()
+            self.monitor.count = 0
+            self.var_info.set('アラーム ON')
+        else:
+            self.monitor.limit = None
+            self.monitor.count = 0
+            if self.monitor.active:
+                self.monitor.active = False
+                if self.relay is not None:
+                    self.relay.off()
+            self.var_info.set('アラーム OFF')
+
+    def _on_live_toggle(self):
+        if self.var_live.get():
+            if self._ensure_canvas():
+                self.canvas.get_tk_widget().pack(fill='both', expand=True)
+        else:
+            if self.canvas is not None:
+                self.canvas.get_tk_widget().pack_forget()
+
+    def _ensure_canvas(self):
+        if self.canvas is not None:
+            return True
+        try:
+            import matplotlib
+            matplotlib.use('TkAgg')
+            from matplotlib.figure import Figure
+            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+            fig = Figure(figsize=(6.5, 4.2))
+            self._ax1 = fig.add_subplot(211)
+            self._ax2 = fig.add_subplot(212)
+            self._ax1.set_ylabel('Force [N]'); self._ax2.set_ylabel('Moment [N*m]')
+            self._ax2.set_xlabel('Time [s]')
+            for ax in (self._ax1, self._ax2):
+                ax.grid(True, alpha=0.3)
+            self._ln = {}
+            for k, ax in (('fmag', self._ax1), ('mmag', self._ax2)):
+                (self._ln[k],) = ax.plot([], [], 'k-', lw=1.6,
+                                         label='|F|' if k == 'fmag' else '|M|')
+                ax.legend(loc='upper left', fontsize=8)
+            self._fig = fig
+            self.canvas = FigureCanvasTkAgg(fig, master=self.plot_frame)
+            return True
+        except Exception as e:
+            self.var_info.set('ライブ表示を使えません: %s' % e)
+            self.var_live.set(False)
+            return False
+
+    # ---- Start / Stop ----
+    def on_start(self):
+        global _SENSOR
+        if self.recording:
+            return
+        self.var_status.set('零点測定中… ツールに触れないでください')
+        self.root.update_idletasks()
+        try:
+            if not USE_DEMO_SIGNAL:
+                self.sensor = DynPickSensor(port=DYNPICK_PORT, baudrate=DYNPICK_BAUD)
+                self.sensor.open()
+                _SENSOR = self.sensor
+                if TARE_ON_START:
+                    self.sensor.tare(TARE_SAMPLES)
+        except Exception as e:
+            self.var_status.set('センサ接続エラー: %s' % e)
+            self.sensor = None
+            return
+
+        self.log_path = LOG_PATH or _make_log_path()
+        self.logger = ForceLogger(self.log_path)
+        relay = None
+        if RELAY_PORT:
+            try:
+                relay = SerialRelay(RELAY_PORT)
+            except Exception as e:
+                print('リレーを開けませんでした（アラームのみ）:', e)
+        self.relay = relay
+        alarm_path = os.path.splitext(self.log_path)[0] + '_alarms.csv'
+        self.monitor = ForceLimitMonitor(
+            self._limit_value() if self.var_alarm.get() else None,
+            hold=FORCE_LIMIT_HOLD, mask_s=FORCE_LIMIT_MASK,
+            latch=FORCE_LIMIT_LATCH, alarm_path=alarm_path, relay=relay)
+
+        self.buf.clear()
+        self.rows = 0
+        self.t_start = time.time()
+        self.recording = True
+        self.btn_start.config(state='disabled')
+        self.btn_stop.config(state='normal')
+        self.var_status.set('計測中 — Stop で保存')
+        self._sample_tick()
+        self._ui_tick()
+
+    def on_stop(self):
+        if not self.recording:
+            return
+        self.recording = False
+        if self._sample_after is not None:
+            self.root.after_cancel(self._sample_after)
+        if self._ui_after is not None:
+            self.root.after_cancel(self._ui_after)
+        if self.logger is not None:
+            self.logger.close()
+        if self.monitor is not None:
+            if self.monitor.events:
+                self.var_info.set('過負荷 発報 %d 回' % self.monitor.events)
+            self.monitor.close()
+        if self.sensor is not None:
+            self.sensor.close()
+            self.sensor = None
+        self.btn_start.config(state='normal')
+        self.btn_stop.config(state='disabled')
+        self.var_status.set('保存しました（%d 行）: %s'
+                            % (self.rows, os.path.basename(self.log_path)))
+        if PLOT_ON_SAVE:
+            _launch_plot(self.log_path)
+        elif OPEN_FOLDER_ON_SAVE:
+            _reveal_in_explorer(self.log_path)
+
+    def _sample_tick(self):
+        if not self.recording:
+            return
+        t0 = time.time()
+        try:
+            fx, fy, fz, mx, my, mz = read_wrench(t0)
+        except Exception as e:
+            self.var_status.set('読み取りエラー: %s' % e)
+            self.on_stop()
+            return
+        ts = t0 - self.t_start
+        self.logger.write(ts, (fx, fy, fz, mx, my, mz), None, True)
+        self.rows += 1
+        fmag = math.sqrt(fx * fx + fy * fy + fz * fz)
+        mmag = math.sqrt(mx * mx + my * my + mz * mz)
+        self.buf.append((ts, fmag, mmag))
+        if self.monitor is not None:
+            # しきい値・アラームON/OFFを毎サンプル反映（画面操作を即時に効かせる）
+            self.monitor.limit = self._limit_value() if self.var_alarm.get() else None
+            self.monitor.update(ts, fmag)
+        # 次サンプルを予約（読み取り時間を差し引いて周期を保つ）
+        dt_ms = int(1000.0 / HEADLESS_RATE) - int((time.time() - t0) * 1000)
+        self._sample_after = self.root.after(max(1, dt_ms), self._sample_tick)
+
+    def _ui_tick(self):
+        # 読み値とライブグラフを ~10Hz で更新（記録レートとは独立）
+        if self.buf:
+            ts, fmag, mmag = self.buf[-1]
+            over = (self.monitor is not None and self.monitor.active)
+            self.var_read.set('|F| = %5.2f N%s' % (fmag, '   ⚠ 過負荷' if over else ''))
+            self.var_info.set('t=%.1fs  行=%d' % (ts, self.rows))
+            if self.var_live.get() and self.canvas is not None:
+                self._redraw_live()
+        if self.recording:
+            self._ui_after = self.root.after(100, self._ui_tick)
+
+    def _redraw_live(self):
+        data = list(self.buf)
+        if not data:
+            return
+        tx = [d[0] for d in data]
+        self._ln['fmag'].set_data(tx, [d[1] for d in data])
+        self._ln['mmag'].set_data(tx, [d[2] for d in data])
+        x1 = tx[-1]
+        x0 = max(0.0, x1 - LIVE_WINDOW_S)
+        for ax in (self._ax1, self._ax2):
+            ax.set_xlim(x0, max(x1, x0 + 1))
+            ax.relim(); ax.autoscale_view(scalex=False, scaley=True)
+        try:
+            self.canvas.draw_idle()
+        except Exception:
+            pass
+
+    def on_close(self):
+        if self.recording:
+            self.on_stop()
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
+
+    def run(self):
+        self.root.mainloop()
+
+
+def main_panel():
+    """記録パネル（Tkinter）を起動。Tk が使えなければ従来の自動記録にフォールバック。"""
+    try:
+        import tkinter as tk
+        from tkinter import ttk
+    except Exception as e:
+        print('Tkinter が使えないため、従来の自動記録で起動します:', e)
+        return main_headless()
+    try:
+        app = RecorderApp(tk, ttk)
+    except Exception as e:
+        print('記録パネルを開けないため、従来の自動記録で起動します:', e)
+        return main_headless()
+    print('記録パネルを起動しました。Start を押すと計測を開始します。')
+    app.run()
+
 
 if __name__ == '__main__':
     import argparse
@@ -872,6 +1180,9 @@ if __name__ == '__main__':
                     help='一度発報したら解除（再起動）まで保持＝リレーON維持（E-stop/HOLD向け）')
     ap.add_argument('--relay-port', metavar='COMx',
                     help='USBリレーのシリアルポート（例 COM5）。指定時、発報でリレー接点をON')
+    ap.add_argument('--panel', action='store_true',
+                    help='記録パネル(Tkinter)で起動。自動で始めず Start ボタンで計測開始。'
+                         'しきい値入力・アラームON/OFF・ライブ表示ON/OFF(既定OFF)を画面操作。--no-robodk 用')
     args = ap.parse_args()
 
     # コマンドライン引数で冒頭パラメータを上書き（ファイルを編集せずに切替できる）
@@ -916,6 +1227,9 @@ if __name__ == '__main__':
 
     if USE_ROBODK:
         main()
+    elif args.panel:
+        # 操作パネル（Start ボタンで開始・しきい値/アラーム/ライブをその場で切替）
+        main_panel()
     else:
         # RoboDK 未使用モードは常に記録する（記録が目的のため）
         main_headless()

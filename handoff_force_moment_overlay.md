@@ -139,7 +139,16 @@ FANUC ロボットで包丁の研磨（TORMEK T-8）を行う際に、**DynPick 
 - どちらのPCでも見られるようにするため、**両PCに matplotlib を入れておく**（記録用PCが未導入なら `pip install matplotlib`）。
 
 ### 起動オプション（ファイルを編集せず切替）
-`--demo` / `--port` / `--baud` / `--robot` / `--always-on` / `--detect busy|joints|both` / `--log` / `--log-path` / `--no-robodk` / `--no-open` / `--rate` / `--live` / `--plot` / `--force-limit` / `--force-limit-hold` / `--force-limit-mask` / `--force-limit-latch` / `--relay-port`
+`--demo` / `--port` / `--baud` / `--robot` / `--always-on` / `--detect busy|joints|both` / `--log` / `--log-path` / `--no-robodk` / `--no-open` / `--rate` / `--live` / `--plot` / `--panel` / `--force-limit` / `--force-limit-hold` / `--force-limit-mask` / `--force-limit-latch` / `--relay-port`
+
+### 記録パネル（`--panel`）— 画面操作で計測（`record_force.bat` の既定）
+`--no-robodk --panel` で **Tkinter の操作パネル**が開く。**自動では始まらず、画面の操作で計測する**：
+- **▶ Start / ■ Stop** … Start を押すと**零点測定(tare)してから計測開始**（自動スタートしない）。Stop で保存し、`--plot` 指定時はグラフを開く。再度 Start で新しいCSVに記録。
+- **しきい値 |F| ≥ ○ N** … 過負荷しきい値を**画面で入力**（Enter か「適用」）。**計測中もその場で変更可**。既定20N（突入過渡~25Nを踏まえた出発点。工具保護は 15〜30N を実測で調整）。
+- **アラーム ON/OFF** … 過負荷監視の有効/無効を**チェックで切替**（OFFで監視停止・リレーOFF）。
+- **ライブ表示 ON/OFF** … 力/モーメント時系列の表示を**チェックで切替。既定OFF**（ONで同じ窓に直近30秒を描画。要 matplotlib）。
+- 実装は `RecorderApp`（Tk の after ループでセンサ読取・記録・監視。別スレッド不使用）。Tk が無い環境では従来の自動記録(`main_headless`)に自動フォールバック。
+- ※ `record_force.bat` は既定で **`--no-robodk --log --panel --plot`**（パネル起動・Stop後にグラフ）。旧来の「起動即・常時記録」が良ければ `--panel` を外す（`--no-robodk --log --live --plot` 等）。
 
 - `--live` … 記録しながら**リアルタイムで力/モーメントを別ウィンドウ表示**（直近30秒を流し表示）。要 matplotlib。
   終了はグラフ窓の **STOPボタン / 窓を閉じる / q キー**（GUIにフォーカスがあると Ctrl+C が効かないため。端末での Ctrl+C も可）。
@@ -147,7 +156,7 @@ FANUC ロボットで包丁の研磨（TORMEK T-8）を行う際に、**DynPick 
 - `--plot` … 記録終了(Ctrl+C)後に**自動でグラフ(`plot_force_log.py`)を開く**。要 matplotlib。指定時はエクスプローラー表示より優先。
 - `--no-open` … 記録終了後にCSVフォルダをエクスプローラーで自動表示しない（既定は自動で開く）。
 - `--rate` … サンプリング周波数[Hz]。既定は **記録のみ(`--no-robodk`)=50Hz** / RoboDK連携=10Hz。
-- ※ `record_force.bat` は既定で `--no-robodk --log --live --plot`（記録＋リアルタイム表示＋終了後グラフ）。
+- ※ `record_force.bat` は既定で `--no-robodk --log --panel --plot`（記録パネル起動＋Stop後グラフ）。`--panel` を外すと従来の起動即・常時記録。
 
 ### 過負荷監視（工具・ワーク保護）— `--force-limit`
 押し過ぎ・突入で刃/砥石/センサを守るための**ソフト監視**（`--no-robodk` の記録ループに実装）。`|F|`[N] がしきい値以上に一定サンプル連続で達したら**発報**する。
@@ -275,7 +284,7 @@ DynPick ─USB─▶ PC(force_moment_overlay.py, --force-limit) ─→ 発報で
 - `dynpick_sensor.py` … DynPick シリアル読み取り・LSB→N/Nm 換算。`python dynpick_sensor.py` でセルフテスト（HW不要）。
 - `plot_force_log.py` … CSV → 力/モーメント時系列グラフ（matplotlib）。**空運転差引(`--baseline*`)・左右サマリ(`--sides`)・自動ゼロ(`--auto-zero`)・操作パネル(`--panel`)・個別保存(`--save-split`)・デザイン設定(STYLE/`plot_config.json`)** を内蔵。関数: `make_figure`(線ハンドル返す)/`add_control_panel`/`apply_baseline`*/`estimate_baseline_shift`/`detect_phase_split`/`side_summary`/`auto_zero`/`save_axes_region`。
 - `plot_config.example.json` … デザイン変更のテンプレート。`plot_config.json` にコピーして編集（同フォルダ）。`plot_config.json` は Git管理外。
-- `record_force.bat` / `plot_force.bat` … デスクトップ起動用（ショートカットを作って使う）。`plot_force.bat` は `--panel` 付き。
+- `record_force.bat` / `plot_force.bat` … デスクトップ起動用（ショートカットを作って使う）。`record_force.bat` は **`--panel` 付き＝記録パネル（Startボタン・しきい値入力・アラーム/ライブ切替）**で起動。`plot_force.bat` も `--panel` 付き（表示側パネル）。
 - `plot_sides.bat` … 最新の研磨CSVを `air.csv`（空運転）でサイド別差引＋左右サマリ表示（`--sides --auto-baseline`）。**空運転を `air.csv`（`air.csv.csv` も可）としてフォルダに置く**だけ。無ければ auto-zero にフォールバック。分岐はPython側(`--auto-baseline`)なので.batに特殊文字を入れず堅牢。
 - `make_shortcuts.bat` … デスクトップに `record_force` / `plot_force` / `plot_sides` ショートカットを自動作成（最初に一度ダブルクリック）。
 - `dynpick_check.py` … 接続・スケール確認ツール（RoboDK不要）。
