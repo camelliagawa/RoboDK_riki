@@ -1319,7 +1319,7 @@ def main():
         baseline_note = ' [baseline-subtracted]'
     elif args.auto_zero:
         _, split_t = auto_zero(d, split=split_t)
-        baseline_note = ' [自動ゼロ済み(空運転なし)]'
+        baseline_note = ' [auto-zeroed (no air-run)]'
         print('自動ゼロ: 各サイドの重力を自分自身から推定して差し引きました。')
         print('  ⚠ 砥石から離れず押しっぱなしの側（例: HaR）は、姿勢リップルを接触力と')
         print('     誤認して過大に出ます。正確な左右比較には --baseline（空運転）を使ってください。')
