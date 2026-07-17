@@ -15,6 +15,7 @@
 - PR #1 をマージ（前回までの全成果を既定ブランチへ統合）。
 - **既定ブランチを `main` に変更**（旧 `claude/riki-handover-review-g7dngo` から切替。名前がわかりやすいように）。
 - 不要ブランチ（旧既定 `claude/riki-handover-review-g7dngo`、PR #1 head `claude/handoff-doc-update-ly2ak8`）を削除。
+- ⚠ **各PC（metal2022 / koder）は `main` に切り替えて `git pull` すること**（旧ブランチ削除により古い checkout のままだと pull 不可）。更新後 `make_shortcuts.bat` でショートカットを最新化。§2 参照。
 - コード/データの機能追加は無し（運用整備のみ）。
 
 ### 最近の更新（2026-07-16 セッション, 版 2026-07-16.6）
@@ -55,8 +56,17 @@ FANUC ロボットで包丁の研磨（TORMEK T-8）を行う際に、**DynPick 
 - 役割の違いは「**センサが繋がっているか**」だけ。**グラフ化(`plot_force_log.py`)は両PCで動く**（matplotlib さえ入っていればどちらでも見られる）。
 - **記録用PC（例: `metal2022`）** … DynPick センサを接続。conda base（`(base)`）に `pyserial`(+`robodk`) あり。ここで力を記録。**グラフも見たいので `matplotlib` を入れておく**（`pip install matplotlib` / conda なら `conda install matplotlib`）。
 - **分析用PC（例: `koder`）** … Python 3.12 + `matplotlib`。CSV を受け取ってグラフ化。センサ不要。
-- 両PCともリポジトリをクローンし本ブランチをチェックアウト済み。
-- `plot_force_log.py` はスクリプトのあるフォルダ（無ければカレント）の最新 `force_log_*.csv` を自動選択するので、CSV をそのフォルダに置けばどちらのPCでも同じ操作で開ける。
+- 両PCともリポジトリをクローン済み。**既定ブランチは `main`**（2026-07-17 に旧 `claude/*` ブランチから移行）。
+- **各PCを最新の `main` に更新する手順**（`RoboDK_riki` フォルダで実行）:
+  ```
+  git fetch origin --prune
+  git checkout main
+  git pull origin main
+  ```
+  ⚠ 旧ブランチ（`claude/riki-handover-review-g7dngo` / `claude/handoff-doc-update-ly2ak8`）は**削除済み**。PCがそれらを checkout したままだと pull が通らないので、必ず上記で `main` に切り替えること。
+- **更新後にデスクトップのショートカットを最新化**: `RoboDK_riki` フォルダの **`make_shortcuts.bat` をダブルクリック**（`record_force` / `plot_force` / `plot_sides` を作り直し。ショートカットは .bat を指すので中身が更新されれば自動的に最新の動作になる）。
+- `plot_force_log.py` はスクリプトのあるフォルダ（無ければカレント）の最新 `force_log_*.csv` を自動選択する。CSV をそのフォルダに置けばどちらのPCでも同じ操作で開ける。**記録CSVが1本も無いときは同梱 `samples/` の見本CSVに自動フォールバック**する（＝更新済みなら空でも図が出る）。
+  - ⚠ **`plot_force`/`plot_sides` が「CSVが見つかりません」と出る場合** … その PC が古く `samples/` フォルダを持っていない状態。上記の `git pull` で `main` に更新すれば解消する（`samples/force_log_*.csv` が入る）。記録済みなら、その CSV を `RoboDK_riki` フォルダに置けば自動選択される。
 
 ---
 
