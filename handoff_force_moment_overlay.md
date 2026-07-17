@@ -1,13 +1,35 @@
-# 引き継ぎ書 : 力覚センサ × RoboDK 力/モーメント リアルタイム可視化
+# 引き継ぎ書 : DynPick 力覚センサ 力/モーメント 記録・可視化
 
-> Claude Code での継続作業用ハンドオフ。まず本書と `force_moment_overlay.py` を読み込んでから着手すること。
+> Claude Code での継続作業用ハンドオフ。まず本書と `force_moment_overlay.py` / `plot_force_log.py` を読んでから着手すること。
+
+## 🔖 次セッションの作業ブランチ（毎回ここを最新化する）
+
+- **PR #1 はマージ済み**（既定ブランチ `claude/riki-handover-review-g7dngo` に統合済み）。前回までの全成果はこのマージで既定ブランチに入っている。
+- **次セッションの作業ブランチ: 未確定** → 既定ブランチ `claude/riki-handover-review-g7dngo` から**新しいブランチを切って**作業すること（マージ済み履歴の上に別PRブランチを積まない）。
+- 使い方:
+  - PR #1 はマージ済みなので、既定ブランチから新しいブランチを切って作業する。切ったら**この欄にブランチ名を必ず書き込む**。
+  - 以後もし別の PR が未マージのまま残った場合 → その PR の head ブランチをそのまま継続してコミットする。
+- ルール: **各セッションの終わりに、この「次セッションの作業ブランチ」欄を必ず更新する。**
+
+### 最近の更新（2026-07-16 セッション, 版 2026-07-16.6）
+`plot_force_log.py` を報告書向けに強化: 線種の系列別指定（既定 破線/点線/一点鎖線/実線）・操作パネルのカード刷新・軸ラベル編集・力/モーメントの単体クリーン保存（タイトル無し）・凡例重なり回避・Shade/Max pt 既定OFF・**CSVドラッグ&ドロップ**（不正CSVはエラーダイアログ）・**空運転差引の自動化＋Baselineトグル**（`air.csv` 自動検出、`--raw` で無効）・版表示・最新CSVをファイル名日時で判定・サンプル同梱（`samples/force_log_*.csv`, `samples/air.csv`）。
+
+---
+
+## 0. 3行サマリ（まずこれ）
+
+- **RoboDK から実機をリアルタイム駆動できない**（Stream Motion R784 未導入）ので、本番は **ロボット＝ペンダントで KENMA 実行 / 力＝PCで `--no-robodk` 記録**。
+- **測定値は工具自重（重力）に支配される**。姿勢ごとに違う重力を消すため、**「包丁付き・砥石だけ逃がした空運転」を1本撮り、`plot_sides`（`--baseline-persides`）で差し引く**のが正解。空運転1本は同じ包丁・同じ角度なら使い回せる（順番を変えてもOK）。
+- 直近結果（`..._161538.csv`）: **包丁をしっかり固定したら左右がほぼ均等**（HaR≈2.2N / HaL≈2.1N, 比0.96）。以前の弱く非対称だった主因は固定の甘さ。次は条件を振って比較する段階。
+- 可視化は `plot_force_log.py` に成長: **空運転差引・左右サマリ・操作パネル(`--panel`)・デザイン設定(`plot_config.json`)・力/モーメント個別保存(`--save-split`)** まで実装済み。
 
 ---
 
 ## 1. 目的（ゴール）
 
-FANUC ロボット（Run on Robot 接続）を動かしたときに、**DynPick 力覚センサの計測を自動でスタート**し、
-**力とモーメントを RoboDK の 3D ビュー内に矢印でリアルタイム表示**する。
+FANUC ロボットで包丁の研磨（TORMEK T-8）を行う際に、**DynPick 6軸力覚センサで力・モーメントを測定して記録**し、
+**時系列グラフで可視化**する。当初は「RoboDK の 3D ビューに矢印でリアルタイム表示」も狙ったが、
+本機はリアルタイム駆動オプションが無いため、**記録＋グラフ化を本線**とする（矢印表示はシミュレーション/接続可能な環境での任意機能として維持）。
 
 ---
 
@@ -15,131 +37,233 @@ FANUC ロボット（Run on Robot 接続）を動かしたときに、**DynPick 
 
 | 項目 | 内容 |
 |------|------|
-| ロボット | FANUC LR Mate 200iD/7L |
-| 力覚センサ | DynPick ZEF-6A100（6軸）。Python で生値取得済み（単位 N, N·m） |
+| 設置 | 岐阜県工業技術センター |
+| ロボット | FANUC LR Mate 200iD/7L（コントローラ R-30iB、iHMI ペンダント） |
+| 力覚センサ | DynPick ZEF-6A100（6軸）。USBシリアル。`COM3` / `921600` |
 | 研磨機 | TORMEK T-8 |
-| RoboDK 接続 | **Run on Robot（ドライバ接続）** |
-| 実装方針 | 既存の DynPick 読み取り Python に **robolink（RoboDK Python API）を統合して一体化** |
-| 座標系基準 | riki_Assem2 |
-| 対象ステーション例 | 260706_omori_kaiten |
+| ステーション | `260706_omori_kaiten.rdk`（ロボット / riki_Assem2 / Tormek / 曲線追従プロジェクト HaL・HaR / プログラム KENMA） |
+| RoboDK 駆動 | **不可**（Stream Motion R784 未導入。FanucSM ドライバは接続不成立。ネットワークは 192.168.10.1:2000 に ping 疎通OK） |
+| 座標系基準 | Kenma point / riki_Assem2 |
+
+### PC 2台構成
+- 役割の違いは「**センサが繋がっているか**」だけ。**グラフ化(`plot_force_log.py`)は両PCで動く**（matplotlib さえ入っていればどちらでも見られる）。
+- **記録用PC（例: `metal2022`）** … DynPick センサを接続。conda base（`(base)`）に `pyserial`(+`robodk`) あり。ここで力を記録。**グラフも見たいので `matplotlib` を入れておく**（`pip install matplotlib` / conda なら `conda install matplotlib`）。
+- **分析用PC（例: `koder`）** … Python 3.12 + `matplotlib`。CSV を受け取ってグラフ化。センサ不要。
+- 両PCともリポジトリをクローンし本ブランチをチェックアウト済み。
+- `plot_force_log.py` はスクリプトのあるフォルダ（無ければカレント）の最新 `force_log_*.csv` を自動選択するので、CSV をそのフォルダに置けばどちらのPCでも同じ操作で開ける。
 
 ---
 
 ## 3. 現状（Done）
 
-- たたき台スクリプト **`force_moment_overlay.py`** を作成、構文チェック済み。
-- 実装済みの仕組み：
-  1. **自動スタート/ストップ** … `robot.Busy()` でロボット動作を検知。動作中のみ矢印を表示し、停止で消す。
-  2. **矢印描画** … 毎ループ TCP を基点に、力ベクトル（赤）とモーメントベクトル（青）を折れ線カーブで描画。
-  3. **平滑化** … EMA ローパス + デッドバンドでノイズ／ガタつきを抑制。
-  4. **デモモード** … `USE_DEMO_SIGNAL=True` でセンサ未接続でもダミー波形で描画テスト可能。
-  5. **DynPick 実センサ読み取り**（新規） … `dynpick_sensor.py` を実装。シリアルで `R` 要求 → 生値(LSB) 受信 →
-     `(生値 − 零点) / 主軸感度` で N / N·m へ換算。`read_wrench()` から呼び出し済み。
-     感度・零点の初期値は riki（力覚センサ CSV グラフビューア）の出荷特性データ（ZEF-6A100-4-RAD）に準拠。
-     開始時に無負荷で零点を自動実測する `tare()` 付き。
-     ※ この読み取り部分は riki リポジトリの CSV 換算仕様（列順・換算式・感度）を参考に新規実装したもの。
-       riki 自体は「記録済み CSV を後から見るビューア」で、ライブ読み取りは含まれていなかった。
-- 描画方式：`AddCurve(points, None, False, PROJECTION_NONE)`
-  （reference=None → ステーション絶対座標、投影なし＝空中に描画）。
-  1 矢印 = 1 折れ線カーブ。ちらつき低減のため「新規追加 → 旧削除」の順で更新。
+### 記録・可視化パイプライン（本線）
+- **`force_moment_overlay.py`** … 本体。以下のモードを持つ:
+  - `--no-robodk`（**本番モード**）… RoboDK を使わずセンサ読み取り＋CSV記録のみ。常時記録。端末にライブ値表示。
+    robolink を遅延 import にしたので **robodk 未インストールでも動く**。
+  - 既定（RoboDK連携）… `robot.Busy()`＋関節角変化で動作検知し、動作中のみ力/モーメント矢印を RoboDK 3D に描画。
+  - `--demo` … センサ無しでダミー波形。描画/記録/グラフの動作確認用。
+- **`dynpick_sensor.py`** … DynPick 読み取り。`R` 要求 → 生値(LSB) → `(生値−零点)/感度` で N・N·m 換算。起動時 `tare()` で零点実測。
+- **`plot_force_log.py`**（新規）… `force_log_*.csv` から力[N]・モーメント[N·m]を2段の時系列グラフに描画。PNG保存＋表示。統計出力。
+- **`record_force.bat` / `plot_force.bat`**（新規）… デスクトップからダブルクリック起動用（PowerShell経由）。
+
+### 確定したパラメータ・調整
+- 接続: `DYNPICK_PORT='COM3'` / `DYNPICK_BAUD=921600`。
+- 軸校正: `AXIS_MAP_FORCE = AXIS_MAP_MOMENT = [(1, -1), (2, -1), (0, +1)]`（3方向とも押した向きに矢印が伸びるのを確認）。
+- 表示スケール: `FORCE_SCALE=7` / `MOMENT_SCALE=200`（矢印表示用。記録には無関係）。
+- 矢印基点: `robot.PoseAbs()*SolveFK(Joints,PoseTool)` で参照フレーム非依存の絶対TCP。`BASE_OFFSET_TOOL` で微調整可。
+- 動作検知: `MOTION_DETECT='both'`（Busy＋関節角変化のOR）、`MOTION_HOLD_S` で検知後の途切れ防止。
+- RoboDK描画の通信断→自動再接続、`UPDATE_RATE=10`。
 
 ---
 
-## 4. コード構成メモ（`force_moment_overlay.py`）
+## 4. コード構成メモ
 
-### 主要パラメータ（スクリプト冒頭に集約）
-- `ROBOT_NAME` … `''` で先頭ロボット。名前指定可。
-- `USE_DEMO_SIGNAL` … True でダミー波形、False で実センサ。
-- `FORCE_SCALE [mm/N]` / `MOMENT_SCALE [mm/(N·m)]` … 矢印長さ倍率。
-- `FORCE_DEADBAND` / `MOMENT_DEADBAND` … 非表示しきい値。
-- `MAX_ARROW_LEN` … 矢印長さ上限（振り切れ防止）。
-- `UPDATE_RATE [Hz]` / `EMA_ALPHA` … 更新レート／ローパス係数。
-- `ACTIVE_ONLY_WHEN_MOVING` … 動作中のみ表示（自動スタート）の ON/OFF。
-- `AXIS_MAP_FORCE` / `AXIS_MAP_MOMENT` … センサ生値 → ツール座標の軸割当 `(index, 符号)`。
+### `force_moment_overlay.py` 主要パラメータ（冒頭に集約）
+- `USE_DEMO_SIGNAL` / `USE_ROBODK` … 波形と RoboDK 連携の有無（`--demo` / `--no-robodk`）。
+- `DYNPICK_PORT` / `DYNPICK_BAUD` / `TARE_ON_START` / `TARE_SAMPLES`。
+- `FORCE_SCALE` / `MOMENT_SCALE` / `*_DEADBAND` / `MAX_ARROW_LEN`（矢印表示用）。
+- `UPDATE_RATE` / `EMA_ALPHA` / `ACTIVE_ONLY_WHEN_MOVING`。
+- `MOTION_DETECT` / `JOINT_MOVE_DEG` / `MOTION_HOLD_S`（動作検知）。
+- `AXIS_MAP_FORCE` / `AXIS_MAP_MOMENT` / `BASE_OFFSET_TOOL`。
+- `LOG_CSV` / `LOG_PATH` / `LOG_EVERY`（記録）。
 
 ### 主要要素
-- `read_wrench(t)` … **★実センサ接続点★**。`(fx,fy,fz,mx,my,mz)` を N, N·m で返す。
-- `WrenchArrow` クラス … 矢印の生成・更新・消去を管理。
-- `main()` … 動作検知 → 読み取り → 軸割当 → EMA → ワールド変換 → 矢印更新のループ。
+- `read_wrench(t)` … `(fx,fy,fz,mx,my,mz)` を N, N·m で返す（実センサ or デモ）。
+- `DynPickSensor` … シリアル接続・読み取り・`tare()`。
+- `ForceLogger` … CSV追記（毎行 flush）。`tcp_pos=None` で位置列は空欄。
+- `main_headless()` … `--no-robodk` の本番ループ（読み取り→記録→ライブ表示）。
+- `main()` … RoboDK連携ループ（動作検知→読み取り→軸割当→EMA→ワールド変換→矢印→記録）。
 
-### 座標変換の流れ
-```
-センサ生値 → AXIS_MAP で軸割当 → ツール座標のベクトル
-          → EMA 平滑化
-          → TCP(=robot.PoseAbs()*robot.Pose()) の回転部でワールド方向へ
-          → 始点=TCP位置, 長さ=|F|×SCALE で矢印描画
-```
+### CSV 列
+`time_iso, t_s, fx_N, fy_N, fz_N, mx_Nm, my_Nm, mz_Nm, Fmag_N, Mmag_Nm, tcp_x_mm, tcp_y_mm, tcp_z_mm, moving`
+- 値は表示用の平滑化/軸割当ではなく **生の物理量(N, N·m)**。`--no-robodk` では TCP位置列は空欄。
 
 ---
 
-## 5. 残タスク（To Do）
+## 5. 本番運用手順（確定版）
 
-優先度順：
+### A. 記録（記録用PC + センサ）
+1. DynPick を USB 接続。RoboDK は不要。
+2. デスクトップの **`record_force`** をダブルクリック（または `python force_moment_overlay.py --no-robodk --log`）。
+3. **「零点測定中…」の間はツールに触れない**（tare）。本番ツール（包丁）装着後に一度やり直すと零点が正確。
+4. 「記録開始」表示後、**ペンダントで KENMA を実行**。
+   - 初回・調整時は **ペンダント速度オーバーライドを 10〜20%**（`SHIFT`＋`+%/-%` で5%刻み）、まず空中で確認。
+   - プログラムの高速移動速度は「曲線追従プロジェクト HaL/HaR → その他の設定 → プログラムイベント → 高速移動速度」。
+     研磨作業速度 50 mm/s とは別（移動を落としたい場合はここを 100 等に）。
+5. 動作中は力がCSVに記録される（`record_force.bat` 既定で**リアルタイムグラフも別窓表示**）。
+   終了は記録ウィンドウで **Ctrl+C** → `force_log_日時.csv` 保存 → **自動でグラフが開く**（`--plot`）。
+   ※ リアルタイム/自動グラフには matplotlib が必要（`pip install matplotlib`）。不要なら `--live`/`--plot` を外す。
 
-- [x] **実センサ接続** … `dynpick_sensor.py`（DynPickSensor）を実装し `read_wrench()` に接続済み。既定 `USE_DEMO_SIGNAL=False`。
-- [x] **接続確認** … 実機で確定: `DYNPICK_PORT='COM3'` / `DYNPICK_BAUD=921600`。応答形式もパース確認済み。
-- [x] **軸校正** … `dynpick_calib.py` で実測 + RoboDK上の向き確認により確定:
-      `AXIS_MAP_FORCE = AXIS_MAP_MOMENT = [(1, -1), (2, -1), (0, +1)]`。
-      3方向とも「押した向きに矢印が伸びる」ことを確認済み。
-- [x] **スケール調整** … 実測レンジ(最大 力≈30N/モーメント≈1N·m)から `FORCE_SCALE=7` / `MOMENT_SCALE=200` に設定。実研削で微調整可。
-- [x] **基点の見直し** … `robot.PoseAbs()*SolveFK(Joints,PoseTool)` で参照フレーム非依存の絶対TCPを基点に修正（矢印の浮き解消）。`BASE_OFFSET_TOOL` で微調整可。
-- [x] **RoboDK API 安定化** … 高頻度描画で API が切れる問題に、通信断→自動再接続 + `UPDATE_RATE=10` で対応。
-- [ ] **Busy 検知の確認（本番）** … Run on Robot 接続時、`robot.Busy()` で動作中のみ表示されるか本番で確認。出足が鈍ければ関節角変化フォールバックを検討。
-- [ ] **モーメント向きの確認（任意）** … 力と同じ取付回転を適用済み。必要なら既知トルクで検証。
-- [ ] **モーメント表現の改善（任意）** … 回転を表す二重矢じり／円弧矢印など。
-- [ ] **拡張候補（任意）** … 数値テキスト表示、CSV ログ保存、別ウィンドウのリアルタイムグラフ。
-- [ ] **負荷確認** … 毎ループ `AddCurve`/`Delete` の描画・メモリ負荷を長時間運用で監視。重ければ `UPDATE_RATE` を下げる or 更新方式を再検討。
-
----
-
-## 6. 実行環境・運用手順（実機で確立済み）
-
-### 実行環境（Windows + Anaconda）
-- 外部 Python（Miniconda base、または Python310）から `python force_moment_overlay.py` で実行。
-  RoboDK を開いておけば robolink が自動接続する。
-- 必要パッケージ: `robodk`, `pyserial`（`pip install robodk pyserial`）。
-  RoboDK ボタン実行するなら、ツール→オプション→Python のインタープリタに、これらを入れた Python を指定。
-- スクリプトは自フォルダを `sys.path` に追加するので、どこから実行しても隣の `dynpick_sensor.py` を読める。
-
-### 確認・運用の順序
-1. **描画テスト**: `python force_moment_overlay.py --demo` → ダミー波形で赤(力)・青(モーメント)矢印が TCP から出れば RoboDK 連携OK。
-2. **接続/校正の道具**（RoboDK不要, センサのみ）:
-   - `python dynpick_check.py --list` / `--scan-baud` / ライブ表示 … ポート・ボーレート確認、最大値からスケール目安。
-   - `python dynpick_calib.py --port COM3 --baud 921600` … 対話式で各ツール軸を押して `AXIS_MAP` を決定。
-3. **実センサ手押し**: `python force_moment_overlay.py --always-on` → 停止中でも常時表示。押した向きに矢印が伸びるか確認。
-4. **本番**: `python force_moment_overlay.py`（既定 = 実センサ + 動作中のみ表示）を起動 → RoboDK で研磨プログラム(kenma)を Run。
-   起動時 `零点測定中…` の間はツールに触れない。**本番ツール(包丁)装着後に一度 tare し直すと零点が正確**。
+### B. グラフ化（どちらのPCでも可）
+- **記録用PCでそのまま見る場合** … 記録に使ったフォルダには CSV があるので、デスクトップの **`plot_force`** をダブルクリックするだけ。
+- **分析用PCで見る場合** … 記録した `force_log_*.csv` を分析用PCの `RoboDK_riki` フォルダにコピー（USB / 共有フォルダ / OneDrive 等）してから同じ操作。
+- 共通操作:
+  1. デスクトップの **`plot_force`** をダブルクリック（または `python plot_force_log.py`）。
+  2. 最新CSVを自動選択し、グラフ表示＋同名PNG保存。ファイル指定は `python plot_force_log.py 〇〇.csv --contact 3.0`。
+- どちらのPCでも見られるようにするため、**両PCに matplotlib を入れておく**（記録用PCが未導入なら `pip install matplotlib`）。
 
 ### 起動オプション（ファイルを編集せず切替）
-`--demo` / `--port` / `--baud` / `--robot` / `--always-on`
+`--demo` / `--port` / `--baud` / `--robot` / `--always-on` / `--detect busy|joints|both` / `--log` / `--log-path` / `--no-robodk` / `--no-open` / `--rate` / `--live` / `--plot`
+
+- `--live` … 記録しながら**リアルタイムで力/モーメントを別ウィンドウ表示**（直近30秒を流し表示）。要 matplotlib。
+  終了はグラフ窓の **STOPボタン / 窓を閉じる / q キー**（GUIにフォーカスがあると Ctrl+C が効かないため。端末での Ctrl+C も可）。
+  ※ ライブ表示中は再描画に時間を取られ実効サンプリングが下がる（50Hz指定で約25Hz）。フル速度で録りたいときは `--live` を外す。
+- `--plot` … 記録終了(Ctrl+C)後に**自動でグラフ(`plot_force_log.py`)を開く**。要 matplotlib。指定時はエクスプローラー表示より優先。
+- `--no-open` … 記録終了後にCSVフォルダをエクスプローラーで自動表示しない（既定は自動で開く）。
+- `--rate` … サンプリング周波数[Hz]。既定は **記録のみ(`--no-robodk`)=50Hz** / RoboDK連携=10Hz。
+- ※ `record_force.bat` は既定で `--no-robodk --log --live --plot`（記録＋リアルタイム表示＋終了後グラフ）。
+
+### `plot_force_log.py` のオプション
+- `--baseline 空運転.csv` … **空運転CSVを差し引き、重力/姿勢オフセットを除去**して表示（真の接触力を見る本命）。
+  - `--baseline-align` … 記録開始タイミングのズレを**波形(歯)の相互相関で自動整列**してから差引（推奨。LSが同一で尺は同じ・開始位置だけズレるケースに最適）。
+  - `--baseline-persides` … 空運転を**右/左の姿勢ブロックに分け、サイドごとに整列**して差引。**研磨の順番(右先/左先)を変えても同じ空運転1本でOK**（順番非依存）。`plot_sides.bat` は既定でこれを使用。
+  - `--baseline-shift 秒` … 手動で開始点を合わせる（`--baseline-align` を使わない場合）。出力PNGは `*_baselined.png`。
+  - ⚠ **空運転は必ず「包丁を付けたまま砥石だけ逃がして」撮ること**。包丁を外すと自重が変わり（実測で約2.3N差）、差引後に包丁重量が“見かけの接触力”として残る。
+- `--sides` … 右(HaR)/左(HaL)を自動で分けて**各サイドの|F|統計（平均/中央/p90/最大）と左右比**を表示。`--baseline` と併用で真の左右接触力を比較。
+  境界がずれる場合は `--split 秒` で手動指定。（空運転差引＝姿勢ごとゼロなので、これが「左右それぞれ基準ゼロ」の正確版）
+- `--auto-zero` … **空運転CSVなし**で各サイドの重力を自分自身から推定して差引（Webツールの「工程ごと自動ゼロ」相当）。
+  ⚠ **砥石から離れず押しっぱなしの側（HaR）は姿勢リップルを接触力と誤認して過大に出る**（実測: air差引 HaR0.6N が auto-zero 2.1N）。
+  離れる側(HaL)は概ね一致。**正確な左右比較は必ず `--baseline`（空運転）を使うこと**。auto-zero は空運転が全く無いときの目安用。
+
+### 空運転はどれくらいの頻度で必要か
+- 重力は**姿勢(W/P/R)だけ**で決まる。**食い込み量/押付け/速度/パス数を変えても姿勢は不変**なので、**同じ包丁・同じ角度なら `air.csv` を使い回せる（砥石を毎回動かす必要なし）**。
+- 撮り直しが要るのは **包丁/治具の交換** か **角度(W/P/R)の大きな変更** のときだけ。
+- `--contact N` … |F|≥N を加工区間として薄く塗る。
+- `--seg-thr N`（既定1.0）… 接触区間の判定しきい値。**区間ごとの平均/最大力・空中ベースラインを表で出力**。
+- `--no-seg` … 上記の区間解析を出さない。 / `--no-show` … 画面表示せずPNG保存のみ。
+- `--save-split` … **力とモーメントを別々のPNG**（`<名前>_force.png` / `_moment.png`）にも保存。パネルの「Save image」ボタン(Force/Moment/Both)でも保存できる（こちらは操作パネルでの変更を反映）。
+- **グラフの見た目（色/範囲/文字）の変更**:
+  - コードを触らず変えるなら **`plot_config.json`**（`plot_config.example.json` をコピーして編集、同フォルダに置く。書いた項目だけ上書き）。
+  - コード内なら `plot_force_log.py` 冒頭の **`STYLE` 辞書**。
+  - 一時的な変更は実行時オプション: `--title` / `--xlim MIN MAX` / `--ylim-force MIN MAX` / `--ylim-moment MIN MAX` / `--figsize W H` / `--dpi`。
+  - **`--panel`** … グラフ画面右に**操作パネルを常時表示**（カード状にグループ分けした刷新版）。`plot_force.bat`/`plot_sides.bat` は既定で付与。保存PNGはパネル無しのきれいな図（パネル追加前に保存）。起動中の**版**はタイトルバー／パネル右上／端末先頭に表示。パネルの内容:
+    - **Series**（系列ON/OFF・色付きチェック）/ **Elements**（Title・Legend・X-axis・Y-axis・Grid・Shade・**Max pt** の表示ON/OFF。**Shade と Max pt は既定OFF**＝クリーンな図が既定。**air.csv がある時は Baseline** も並び、空運転差引のON/OFFをその場で切替）
+    - **View range**（X/F/M に "min max" 入力、空でAuto）/ **Auto range** / **Colors**（Default/Vivid/Warm/Mono。**Mono を押すと成分ごとに線種(X実線/Y破線/Z点線)も自動割当**し、白黒でも区別できる報告書図をワンクリックで作れる）
+    - **Line style**（**対象を選んでから**線種指定＝系列ごとに変えられる。対象 `All / X / Y / Z / |·|`（X/Y/Z は力·モーメント両方に効く）→ `Solid/Dashed/Dotted/DashDot`）。**既定線種は X=破線 / Y=点線 / Z=一点鎖線 / 合成=実線**（白黒でも成分を区別できる）
+    - **Axis labels**（縦軸・横軸の**表記を自由に編集**。X(時間)/Y force/Y moment に文字を入れて Enter）
+    - **Save image**（**Force / Moment を個別のクリーンな単体PNGで保存**。パネル・隣のグラフ・**タイトルは入らない**。保存結果はパネル内にも緑文字で表示）/ **Title**（タイトル文字の変更。**画面表示のみ。保存画像には入らない**）
+  - **凡例**は上段・下段とも、データに重ならないよう上側に余白を自動確保して配置。
+  - **CSVのドラッグ&ドロップ**: グラフ領域に `force_log_*.csv` をドロップすると、その場で読み込み直して差し替え表示（`--panel` の内容・空運転差引ON/OFFも引き継ぐ）。force_log 形式でない/データが無いCSVは**表示を変えずエラーダイアログ**を出す。※ Qt バックエンド（Anaconda 既定）で有効。効かない場合は `set MPLBACKEND=QtAgg` で起動、または PyQt5 を導入。
+  - **空運転差引の自動化**: フォルダに `air.csv`（`air.csv.csv` 可）を置くと、起動時に自動検出して**既定で空運転差引ON**（重力/姿勢オフセット除去。サイド別整列＝研磨順に依存しない）。生データを見たいときは `--raw` で起動、または実行中はパネルの **Baseline** チェックでON/OFF切替。air.csv は CSVと同じフォルダ／スクリプト／作業フォルダ／`samples/` から探す。
+  - 恒久設定(STYLE/plot_config.json)の追加キー: `show_title/legend/xaxis/yaxis/grid/shade`（`show_shade` 既定False）, `annotate_max`（最大点の表示・既定False）, `force_xaxis`（力グラフにもTime[s]軸）, `ls_fx`…`ls_mmag`（系列ごとの線種。既定は破線/点線/一点鎖線/実線）。
+  - 各名称の変更: `title`, `force_ylabel`, `moment_ylabel`, `xlabel`, 凡例 `label_fx`…`label_mmag`（パネルの Axis labels でも編集可。日本語にするなら `font_family` も指定）。
+  - 日本語ラベルにするなら `font_family` を `"Meiryo"` 等に（Windows）。`plot_config.json` は Git管理外。
+
+### 補助ツール（センサのみ、RoboDK不要）
+- `python dynpick_check.py --list` / `--scan-baud` / ライブ表示 … ポート・ボーレート確認、最大値からスケール目安。
+- `python dynpick_calib.py --port COM3 --baud 921600` … 対話式で各ツール軸を押して `AXIS_MAP` を決定。
+
+### （任意）RoboDK 矢印表示
+`python force_moment_overlay.py --always-on` 等。ただし本機は RoboDK が実機を駆動/監視できないため、
+矢印はシミュレーション姿勢に対して出る（実機位置とはズレる）。手押しでの軸/向き確認には有用。
+
+---
+
+## 6. 残タスク（To Do）
+
+- [x] 実センサ接続 / 接続確認 / 軸校正 / スケール調整 / 基点見直し / API安定化
+- [x] 動作検知の強化（Busy＋関節角フォールバック、`--detect`）
+- [x] CSV記録（`--log`、`ForceLogger`）
+- [x] RoboDK不要の記録モード（`--no-robodk`、`main_headless`）
+- [x] 時系列グラフ生成（`plot_force_log.py`）＋デスクトップ起動（`*.bat`）
+- [x] RoboDK駆動可否の確定（Stream Motion R784 未導入 → 不可）
+- [x] **実研磨データの取得と検証**（2026-07-16, `..._124230.csv` / `..._131010.csv` の2本）。主要知見:
+      - tare良好（開始/終了の空中 |F|≈0.1N、ドリフト無し）。
+      - **測定値は工具自重（重力）オフセットに支配されている**（最重要）。位相1(HaR)は |F|≈8N が136秒続くが、
+        **実機では包丁は砥石から離れている**（作業者確認）。つまりこの8Nは研磨力ではなく、
+        開始時と違う姿勢に工具（包丁＋治具）が回り込んだことによる自重の投影。
+      - 開始1回の tare は開始姿勢の重力しか消せず、HaR/HaL の研磨姿勢では最大8N級の見かけ力が残る。
+        位相2(HaL)は姿勢が約180°反転して自重投影が変わり |F|≈1.5N。**生の数値からは左右の接触力を判断できない**。
+      - 検証: 2本のCSVを時刻で差し引くと位相1の8Nが約0.9Nに相殺（＝共通の重力成分）。空運転差引で消える見込み。
+- [x] **空運転(空研)ベースラインの取得**（2026-07-16, `..._133012.csv`, 砥石に一切非接触）。
+      位相1(HaR)で非接触でも |F|≈6.0N・Mx≈-0.24・リップルまで出る → **プラトー/リップルは自重＋姿勢＋慣性で、研磨力ではない**と確定。
+- [x] 差引の2課題を解明:
+      (1) 空運転6.0N vs 研磨8.3N の約2.3N差は、**空運転で包丁を外したため**（自重が抜けた）。→ 空運転は**包丁付き・砥石だけ逃がして**撮る。
+      (2) 空運転270s vs 研磨276s の尺差は **LS同一なので動作は同尺、記録開始ボタンのタイミング差だけ**。→ 一定シフトで整列可能。
+- [x] **差引ツール群を実装**: `--baseline-align`（相互相関で開始ズレ整列, −4.9s/相関0.98）、`--baseline-persides`（右/左の姿勢ブロックを姿勢で対応づけ個別整列＝**研磨順を変えても空運転1本でOK**）、`--sides`（左右サマリ）、`--auto-zero`（空運転なし・簡易/HaR過大に注意）。
+- [x] **包丁付き空運転で真の接触力を確認**（2026-07-16, `air.csv.csv` + `..._142905/150321/152234/161538`）:
+      - 包丁の固定が甘い頃: HaR≈0.6N / HaL≈1.1N（右がほとんど当たっていない）。切込みを増やしても右は変化せず → 位置ズレを疑い。
+      - **包丁をしっかり固定 (`161538`)**: **HaR≈2.2N / HaL≈2.1N、比0.96 でほぼ均等**。接触力も約3倍。→ **固定の甘さが主因だった**。
+- [ ] **【次はここ】条件を振って比較**（固定を確実にした状態で）… 押付け/速度/パス数などを変えつつ、毎回 `plot_sides` で
+      左右比・接触力レベルを記録。狙いの研磨量に対して力が適正か、左右均等が保てるかを詰める。空運転は使い回し可（`air.csv`）。
+- [ ] **（必要なら）左右の微調整** … 差引後の左右比が崩れたら、刃の砥石中心に対する位置/反転軸・`HaR=CNT30`/`HaL=CNT60`の不一致を点検。
+- [ ] **感度/零点の実機校正（任意・精度向上）** … `dynpick_sensor.py` の `DEFAULT_SENS_*` は出荷特性値。
+      厳密な絶対値が要るなら既知荷重で校正。相対変化・傾向を見る用途なら現状で十分。
+- [ ] **モーメント向きの検証（任意）** … 必要なら既知トルクで確認。
+- [ ] **拡張候補（任意）** … 加工区間の自動判定・集計、複数CSVの比較グラフ、Excel向け集計、数値テキスト表示。
+- [ ] **CSV受け渡しの省力化（任意）** … 共有フォルダ/OneDrive に `force_log_*.csv` を保存する運用。
 
 ---
 
 ## 7. 注意点・既知のリスク
 
-- `robot.Busy()` はドライバ依存で反映が一瞬遅れることがある（→ 関節角変化のフォールバックを検討）。
-- 毎ループ `AddCurve`/`Delete` で RoboDK のツリー／アンドゥ履歴が増える可能性。長時間運用は監視。
-- TCP とセンサ計測原点のオフセットで、矢印の根元位置がずれうる。
-- 軸マッピングはセンサ取付向き依存。**必ず実測で校正**すること。
+- **RoboDK からの実機駆動は不可**（Stream Motion 未導入）。RoboDK 接続を前提にした自動記録（Busy/関節角検知）は
+  本機では効かないため、本番は必ず `--no-robodk`（常時記録）を使う。
+- `force_log_*.csv` は Git 管理外（`.gitignore`）。PC間はファイルコピーで受け渡す。**グラフは両PCで見られる**（matplotlib が両方に必要）。記録用PCで直接見るならコピー不要。
+- 軸マッピング・感度はセンサ取付向き/個体依存。**取付を変えたら必ず再校正**。
+- `--no-robodk` の CSV は TCP 位置が空欄（実機位置は取れない）。力と位置を対応付けたい場合は時刻でプログラム工程と突き合わせる。
+- 記録は毎行 flush なので Ctrl+C で止めても残る。長時間で間引くなら `LOG_EVERY` を上げる。
+- グラフの軸ラベル/凡例/操作パネルの文字は既定で英語（matplotlib の日本語フォント欠落で豆腐化するのを避けるため）。日本語にするなら `plot_config.json` の `font_family` を `"Meiryo"` 等に設定。
+- **空運転(`air.csv`)は「包丁付き・砥石だけ逃がす」で撮る**。包丁を外すと自重が変わり差引が狂う。撮り直しが要るのは包丁/治具交換・角度(W/P/R)大変更時のみ（食い込み/速度/順番の変更では不要）。
+- `plot_sides.bat` は同フォルダの `air.csv`(または`air.csv.csv`)を自動使用。Windowsで拡張子非表示のまま "air.csv" と付けると `air.csv.csv` になる点に注意（両方許容済み）。
+- 記録中の `--live` はGUIにフォーカスがあると Ctrl+C が効かない → **STOPボタン/窓を閉じる/qキー**で終了。
 
 ---
 
 ## 8. 関連ファイル
 
-- `force_moment_overlay.py` … 本体（力/モーメント可視化 + 自動スタート + DynPick 接続）。
-- `dynpick_sensor.py` … DynPick / ZEF 系 6軸センサのシリアル読み取り・LSB→N/Nm 換算モジュール。
-  `python3 dynpick_sensor.py` でパース／換算のセルフテスト実行可（ハードウェア不要）。
-- `dynpick_check.py` … 接続・校正 確認ツール（RoboDK 不要）。ポート列挙・ボーレート自動判定・
-  数値ライブ表示・最大値記録。`--list` / `--scan-baud` / ライブ表示。
-- `calibration_guide.md` … 手順書（ポート/ボーレート・軸校正・スケール・本番の動かし方）。
-- `requirements.txt` … 依存パッケージ（`pyserial`。`robolink`/`robodk` は RoboDK 同梱の Python から利用）。
+- `force_moment_overlay.py` … 本体（記録 + RoboDK矢印 + DynPick接続 + `--no-robodk`）。
+- `dynpick_sensor.py` … DynPick シリアル読み取り・LSB→N/Nm 換算。`python dynpick_sensor.py` でセルフテスト（HW不要）。
+- `plot_force_log.py` … CSV → 力/モーメント時系列グラフ（matplotlib）。**空運転差引(`--baseline*`)・左右サマリ(`--sides`)・自動ゼロ(`--auto-zero`)・操作パネル(`--panel`)・個別保存(`--save-split`)・デザイン設定(STYLE/`plot_config.json`)** を内蔵。関数: `make_figure`(線ハンドル返す)/`add_control_panel`/`apply_baseline`*/`estimate_baseline_shift`/`detect_phase_split`/`side_summary`/`auto_zero`/`save_axes_region`。
+- `plot_config.example.json` … デザイン変更のテンプレート。`plot_config.json` にコピーして編集（同フォルダ）。`plot_config.json` は Git管理外。
+- `record_force.bat` / `plot_force.bat` … デスクトップ起動用（ショートカットを作って使う）。`plot_force.bat` は `--panel` 付き。
+- `plot_sides.bat` … 最新の研磨CSVを `air.csv`（空運転）でサイド別差引＋左右サマリ表示（`--sides --auto-baseline`）。**空運転を `air.csv`（`air.csv.csv` も可）としてフォルダに置く**だけ。無ければ auto-zero にフォールバック。分岐はPython側(`--auto-baseline`)なので.batに特殊文字を入れず堅牢。
+- `make_shortcuts.bat` … デスクトップに `record_force` / `plot_force` / `plot_sides` ショートカットを自動作成（最初に一度ダブルクリック）。
+- `dynpick_check.py` … 接続・スケール確認ツール（RoboDK不要）。
+- `dynpick_calib.py` … 軸校正ツール（対話式）。
+- `calibration_guide.md` … 校正/運用の手順書。
+- `samples/force_log_20260716_161538.csv` … 動作確認・見本用のサンプルCSV（実測データ）。記録CSVが1つも無いとき `plot_force_log.py` はこれを自動で開く。
+- `samples/air.csv` … 見本用の空運転CSV。サンプルを開くと自動で空運転差引が効く（実運用では作業フォルダに `air.csv` を置く）。
+- `requirements.txt` … `pyserial`（記録）/ `matplotlib`（グラフ）。`robodk` は矢印表示時のみ。
+- `.gitignore` … `__pycache__/` `*.pyc` `force_log_*.csv` `plot_config.json`（ただし `samples/` の見本CSVは追跡）。
+- `.gitattributes` … `*.bat` を CRLF で取り出し（cmd 互換）。
 
 ---
 
-## 9. Claude Code への最初の依頼例
+## 9. Claude Code への依頼例
 
-> 「`force_moment_overlay.py` の `read_wrench()` を、`（既存の読み取りモジュール/関数名）` を使う実装に差し替えて、`USE_DEMO_SIGNAL=False` で動くようにして。センサ生値の単位・軸順は `（実際の仕様）` です。」
+- 「研磨と空運転のCSVを渡すので、`--baseline-persides --sides` で左右の接触力を出して。」
+- 「条件違いの複数CSVを1枚のグラフに重ねて比較したい。」
+- 「パネルに『線ごとに色を選ぶボタン』や『凡例の位置変更』を追加して。」
+- 「押した方向と符号が合わないので `AXIS_MAP_FORCE` を修正して。」
 
-軸が合わない場合：
+---
 
-> 「押した方向と矢印の向きが `（例：X と Y が逆）` なので、`AXIS_MAP_FORCE` を修正して。」
+## 10. このセッション(2026-07-16)で実装した主な追加
+
+- 記録: `--rate`(headless既定50Hz) / `--live`(STOPボタン等で終了) / `--plot`(終了後自動グラフ) / `--no-open` / 保存後にフォルダを開く。
+- 差引: `--baseline` `--baseline-align` `--baseline-persides`(順番非依存) `--baseline-shift` / `--sides` `--split` / `--auto-zero`(空運転なし簡易) / `--auto-baseline`(air.csv自動検出, `plot_sides.bat`用)。
+- デザイン: `STYLE`辞書 + `plot_config.json` + 実行時オプション(`--title/--xlim/--ylim-*/--figsize/--dpi`) + **操作パネル`--panel`**（系列/要素ON-OFF・範囲・配色・線種・個別保存・タイトル変更）。
+- 出力: `--save-split`（力/モーメント個別PNG）/ 最大点のON-OFF。
+- ツール: `plot_sides.bat`（左右比較ワンクリック）/ `make_shortcuts.bat`（`record_force`/`plot_force`/`plot_sides`）/ `plot_config.example.json`。
+- プロセス知見: **測定は重力支配→空運転差引が必須**、**包丁の固定を確実にしたら左右均等(≈2.2N)**。

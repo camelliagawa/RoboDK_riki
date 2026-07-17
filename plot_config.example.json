@@ -1,0 +1,46 @@
+{
+  "_使い方": "このファイルを plot_config.json という名前でコピーし、変えたい項目だけ残して編集してください。書いた項目だけが上書きされ、書かない項目は既定のままです。plot_force_log.py と同じフォルダに置きます。",
+
+  "color_x": "#D55E00",
+  "color_y": "#009E73",
+  "color_z": "#0072B2",
+  "color_mag": "#222222",
+  "grid_color": "#CCCCCC",
+  "contact_color": "#F0C000",
+  "contact_alpha": 0.12,
+
+  "lw_component": 1.2,
+  "lw_mag": 2.0,
+  "grid_lw": 0.6,
+
+  "figsize_w": 11.0,
+  "figsize_h": 7.0,
+  "dpi": 120,
+  "font_family": null,
+
+  "force_ylabel": "Force [N]",
+  "moment_ylabel": "Moment [N*m]",
+  "xlabel": "Time [s]",
+  "label_fx": "Fx", "label_fy": "Fy", "label_fz": "Fz", "label_fmag": "|F|",
+  "label_mx": "Mx", "label_my": "My", "label_mz": "Mz", "label_mmag": "|M|",
+  "title": null,
+  "title_fontsize": 11,
+  "legend_loc": "upper right",
+  "legend_fontsize": null,
+
+  "xlim_min": null, "xlim_max": null,
+  "force_ylim_min": null, "force_ylim_max": null,
+  "moment_ylim_min": null, "moment_ylim_max": null,
+
+  "annotate_max": true,
+  "annotate_fontsize": 9,
+
+  "show_fx": true, "show_fy": true, "show_fz": true, "show_fmag": true,
+  "show_mx": true, "show_my": true, "show_mz": true, "show_mmag": true,
+
+  "show_title": true, "show_legend": true, "show_xaxis": true,
+  "show_yaxis": true, "show_grid": true, "show_shade": true, "force_xaxis": true,
+
+  "ls_fx": "-", "ls_fy": "-", "ls_fz": "-", "ls_fmag": "-",
+  "ls_mx": "-", "ls_my": "-", "ls_mz": "-", "ls_mmag": "-"
+}

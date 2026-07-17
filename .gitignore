@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+force_log_*.csv
+plot_config.json
+
+# ただし samples/ の見本CSVは追跡する（動作確認・サンプル表示用）
+!samples/
+!samples/force_log_*.csv
