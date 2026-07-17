@@ -15,8 +15,8 @@
 - PR #1 をマージ（前回までの全成果を既定ブランチへ統合）。
 - **既定ブランチを `main` に変更**（旧 `claude/riki-handover-review-g7dngo` から切替。名前がわかりやすいように）。
 - 不要ブランチ（旧既定 `claude/riki-handover-review-g7dngo`、PR #1 head `claude/handoff-doc-update-ly2ak8`）を削除。
-- ⚠ **各PC（metal2022 / koder）は `main` に切り替えて `git pull` すること**（旧ブランチ削除により古い checkout のままだと pull 不可）。更新後 `make_shortcuts.bat` でショートカットを最新化。§2 参照。
-- コード/データの機能追加は無し（運用整備のみ）。
+- ⚠ **各PC（metal2022 / koder）は `main` に切り替えて `git pull` すること**（旧ブランチ削除により古い checkout のままだと pull 不可。※ `git` は必ず `RoboDK_riki` フォルダ内で実行）。更新後 `make_shortcuts.bat` でショートカットを最新化。§2 参照。
+- `plot_force_log.py` を **版 2026-07-17.1** に更新: auto-zero のタイトルサフィックスを英語化（日本語フォントの無いPCでの tofu／font 警告スパムを解消。baseline 経路は既に英語 `[baseline-subtracted]`）。
 
 ### 最近の更新（2026-07-16 セッション, 版 2026-07-16.6）
 `plot_force_log.py` を報告書向けに強化: 線種の系列別指定（既定 破線/点線/一点鎖線/実線）・操作パネルのカード刷新・軸ラベル編集・力/モーメントの単体クリーン保存（タイトル無し）・凡例重なり回避・Shade/Max pt 既定OFF・**CSVドラッグ&ドロップ**（不正CSVはエラーダイアログ）・**空運転差引の自動化＋Baselineトグル**（`air.csv` 自動検出、`--raw` で無効）・版表示・最新CSVをファイル名日時で判定・サンプル同梱（`samples/force_log_*.csv`, `samples/air.csv`）。
