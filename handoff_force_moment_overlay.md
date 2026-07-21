@@ -17,6 +17,10 @@
 - 不要ブランチ（旧既定 `claude/riki-handover-review-g7dngo`、PR #1 head `claude/handoff-doc-update-ly2ak8`）を削除。
 - ⚠ **各PC（metal2022 / koder）は `main` に切り替えて `git pull` すること**（旧ブランチ削除により古い checkout のままだと pull 不可。※ `git` は必ず `RoboDK_riki` フォルダ内で実行）。更新後 `make_shortcuts.bat` でショートカットを最新化。§2 参照。
 - `plot_force_log.py` を **版 2026-07-17.1** に更新: auto-zero のタイトルサフィックスを英語化（日本語フォントの無いPCでの tofu／font 警告スパムを解消。baseline 経路は既に英語 `[baseline-subtracted]`）。
+- **過負荷監視 `--force-limit` を追加**（コミット `99f7f51`）: `|F|` がしきい値超過で端末アラーム＋ `<CSV名>_alarms.csv` ＋（`--relay-port` 指定時）USBリレーON。デバウンス/マスク/ラッチ対応。詳細は §5「過負荷監視」。
+- **記録パネル `--panel` を追加**（コミット `89c0f8d`）: Tkinter の操作パネル（▶Start でtare→計測開始・しきい値の画面入力・アラーム/ライブのON-OFF切替）。`record_force.bat` の既定に組み込み。詳細は §5「記録パネル」。
+
+> 📌 **コミット由来メモ（履歴を追う人向け）**: 上記 `--force-limit`/`--panel` は 2026-07-17 のコミット `99f7f51`/`89c0f8d` で本ファイルと `force_moment_overlay.py` に反映済み。一方 `handoff_speed_profile_optimization.md` の 2026-07-21 更新（`4fe102b`）は速度カーブ側のみを変更しており、記録側機能とは別コミット・別セッションの成果。両引継書とも内容は `main` で最新。
 
 ### 最近の更新（2026-07-16 セッション, 版 2026-07-16.6）
 `plot_force_log.py` を報告書向けに強化: 線種の系列別指定（既定 破線/点線/一点鎖線/実線）・操作パネルのカード刷新・軸ラベル編集・力/モーメントの単体クリーン保存（タイトル無し）・凡例重なり回避・Shade/Max pt 既定OFF・**CSVドラッグ&ドロップ**（不正CSVはエラーダイアログ）・**空運転差引の自動化＋Baselineトグル**（`air.csv` 自動検出、`--raw` で無効）・版表示・最新CSVをファイル名日時で判定・サンプル同梱（`samples/force_log_*.csv`, `samples/air.csv`）。
