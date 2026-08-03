@@ -14,4 +14,7 @@ rem ============================================================
 rem  末尾/冒頭の「研磨でない山」を消したいときは Trim を使う。例:
 rem     plot_sides.bat --trim - 254     （254秒より後を丸ごと除外）
 rem  追加の引数(%*)はそのまま plot_force_log.py に渡ります。
-powershell -NoExit -ExecutionPolicy Bypass -Command "Set-Location -LiteralPath '%~dp0'; python plot_force_log.py --sides --auto-baseline --panel %*"
+rem
+rem  起動時に自動で最新版へ更新します（git pull）。更新できない環境（gitが無い/
+rem  ネット不通/ローカル変更あり）でも、そのまま今の版で起動します。
+powershell -NoExit -ExecutionPolicy Bypass -Command "Set-Location -LiteralPath '%~dp0'; Write-Host '最新版に更新中 (git pull)...'; try { git pull } catch { Write-Host '（更新スキップ: 今の版で起動します）' }; python plot_force_log.py --sides --auto-baseline --panel %*"
