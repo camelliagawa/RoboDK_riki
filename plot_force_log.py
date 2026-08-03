@@ -564,8 +564,8 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
     from matplotlib.patches import FancyBboxPatch
 
     S = fig._fml['style'] if hasattr(fig, '_fml') else STYLE
-    fig.set_size_inches(max(fig.get_figwidth(), 14.0), max(fig.get_figheight(), 9.0))
-    fig.subplots_adjust(left=0.06, right=0.62, top=0.945, bottom=0.075, hspace=0.22)
+    fig.set_size_inches(max(fig.get_figwidth(), 16.0), max(fig.get_figheight(), 10.5))
+    fig.subplots_adjust(left=0.055, right=0.60, top=0.95, bottom=0.075, hspace=0.22)
 
     # 版を図の右上隅に小さく（パネルは保存PNGより後に付くので保存画像には入らない）
     fig.text(0.992, 0.988, 'ver ' + APP_VERSION, ha='right', va='top',
@@ -614,14 +614,14 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
     # =====================================================================
     #  1) Series / Elements（表示ON/OFF）
     # =====================================================================
-    card(0.652, 0.956)
-    head(L + 0.006, 0.944, 'Series')
-    head(0.826, 0.944, 'Elements')
+    card(0.700, 0.975)
+    head(L + 0.006, 0.960, 'Series')
+    head(0.826, 0.960, 'Elements')
 
     order = [('fx', 'Fx'), ('fy', 'Fy'), ('fz', 'Fz'), ('fmag', '|F|'),
              ('mx', 'Mx'), ('my', 'My'), ('mz', 'Mz'), ('mmag', '|M|')]
     slabels = [lb for _, lb in order]
-    ax_s = fig.add_axes([0.664, 0.660, 0.150, 0.272]); ax_s.set_axis_off()
+    ax_s = fig.add_axes([0.664, 0.708, 0.150, 0.246]); ax_s.set_axis_off()
     scolors = [lines[k].get_color() for k, _ in order]
     try:
         chk_s = CheckButtons(ax_s, slabels, [lines[k].get_visible() for k, _ in order],
@@ -651,7 +651,7 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
     if has_air:
         elabels.append('Baseline')
         estate.append(bool(pstate.get('baseline_on')))
-    ax_e = fig.add_axes([0.827, 0.660, 0.150, 0.272]); ax_e.set_axis_off()
+    ax_e = fig.add_axes([0.827, 0.708, 0.150, 0.246]); ax_e.set_axis_off()
     try:
         chk_e = CheckButtons(ax_e, elabels, estate,
                              frame_props={'s': 92, 'facecolor': 'white',
@@ -726,9 +726,9 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
     # =====================================================================
     #  2) View range / Trim
     # =====================================================================
-    card(0.498, 0.642)
-    head(L + 0.006, 0.630, 'View range')
-    b_auto = Button(fig.add_axes([0.820, 0.620, 0.108, 0.020]), 'Auto range',
+    card(0.516, 0.690)
+    head(L + 0.006, 0.678, 'View range')
+    b_auto = Button(fig.add_axes([0.820, 0.668, 0.108, 0.020]), 'Auto range',
                     color=BTN_C, hovercolor=BTN_HOVER)
     b_auto.label.set_fontsize(9.0)
 
@@ -738,10 +738,10 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
         fig.canvas.draw_idle()
     b_auto.on_clicked(on_auto); keep.append(b_auto)
 
-    note(L + 0.006, 0.606, 'X/F/M: zoom (Auto resets).  Trim: delete points.')
+    note(L + 0.006, 0.658, 'X/F/M: zoom (Auto resets).  Trim: delete points.')
 
     def make_range_box(y, label, ax_target, axis):
-        tb = TextBox(fig.add_axes([0.748, y, 0.160, 0.024]), label, initial='')
+        tb = TextBox(fig.add_axes([0.748, y, 0.160, 0.022]), label, initial='')
 
         def submit(text):
             text = text.strip()
@@ -755,9 +755,9 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
             except Exception:
                 pass
         tb.on_submit(submit); keep.append(tb)
-    make_range_box(0.580, 'X [s]', ax1, 'x')
-    make_range_box(0.554, 'F [N]', ax1, 'y')
-    make_range_box(0.528, 'M [Nm]', ax2, 'y')
+    make_range_box(0.626, 'X [s]', ax1, 'x')
+    make_range_box(0.600, 'F [N]', ax1, 'y')
+    make_range_box(0.574, 'M [Nm]', ax2, 'y')
 
     # --- Trim: delete the "non-grinding" peaks (retract at the end / entry at
     #   the start) from the data itself. Unlike X[s] zoom (view only, Auto
@@ -794,10 +794,10 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
             ax.relim(); ax.autoscale()
         fig.canvas.draw_idle()
 
-    note(L + 0.006, 0.508, 'Trim [s]')
-    tb_trim_min = TextBox(fig.add_axes([0.760, 0.500, 0.075, 0.024]), 'min',
+    note(L + 0.006, 0.544, 'Trim [s]')
+    tb_trim_min = TextBox(fig.add_axes([0.760, 0.536, 0.075, 0.022]), 'min',
                           initial='')
-    tb_trim_max = TextBox(fig.add_axes([0.900, 0.500, 0.075, 0.024]), 'max',
+    tb_trim_max = TextBox(fig.add_axes([0.900, 0.536, 0.075, 0.022]), 'max',
                           initial='')
     for _tb in (tb_trim_min, tb_trim_max):
         _tb.label.set_fontsize(9.0)
@@ -806,9 +806,9 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
     # =====================================================================
     #  3) Colors（配色テーマ）
     # =====================================================================
-    card(0.418, 0.484)
-    head(L + 0.006, 0.471, 'Colors')
-    note(R - 0.006, 0.471, 'Mono also sets line styles', ha='right')
+    card(0.428, 0.504)
+    head(L + 0.006, 0.492, 'Colors')
+    note(R - 0.006, 0.492, 'Mono also sets line styles', ha='right')
 
     def theme_cb(nm):
         def f(_e):
@@ -823,14 +823,14 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
                     lines[k].set_linestyle(ls)
             redraw_legends(); fig.canvas.draw_idle()
         return f
-    button_row(0.424, 0.036, [(n, n) for n in COLOR_THEMES], theme_cb)
+    button_row(0.446, 0.032, [(n, n) for n in COLOR_THEMES], theme_cb)
 
     # =====================================================================
     #  4) Line style（対象を選んでから線種＝成分ごとに変えられる）
     # =====================================================================
-    card(0.284, 0.406)
-    head(L + 0.006, 0.393, 'Line style')
-    note(0.760, 0.393, 'pick target, then style')
+    card(0.298, 0.418)
+    head(L + 0.006, 0.406, 'Line style')
+    note(0.760, 0.406, 'pick target, then style')
 
     ls_groups = {
         'All': ('fx', 'fy', 'fz', 'fmag', 'mx', 'my', 'mz', 'mmag'),
@@ -855,7 +855,7 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
             ls_target[0] = nm
             hl_target()
         return f
-    button_row(0.344, 0.034,
+    button_row(0.366, 0.032,
                [('All', 'All'), ('X', 'X'), ('Y', 'Y'), ('Z', 'Z'),
                 ('|·|', '|·|')],
                target_cb, hover='#ffe6b3', keepmap=ls_tbtns)
@@ -866,16 +866,16 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
                 lines[k].set_linestyle(ch)
             redraw_legends(); fig.canvas.draw_idle()
         return f
-    button_row(0.302, 0.034, [('Solid', '-'), ('Dashed', '--'),
+    button_row(0.326, 0.032, [('Solid', '-'), ('Dashed', '--'),
                               ('Dotted', ':'), ('DashDot', '-.')], ls_cb, hover='#c8e0ff')
     hl_target()
 
     # =====================================================================
     #  5) Axis labels（縦軸・横軸の表記を自由に変更）
     # =====================================================================
-    card(0.196, 0.276)
-    head(L + 0.006, 0.268, 'Axis labels')
-    note(R - 0.006, 0.268, 'Enter to apply', ha='right')
+    card(0.196, 0.288)
+    head(L + 0.006, 0.278, 'Axis labels')
+    note(R - 0.006, 0.278, 'Enter to apply', ha='right')
 
     def make_label_box(y, label, setter, initial):
         tb = TextBox(fig.add_axes([0.775, y, 0.133, 0.022]), label, initial=initial)
@@ -883,17 +883,17 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
         def submit(text):
             setter(text); fig.canvas.draw_idle()
         tb.on_submit(submit); keep.append(tb)
-    make_label_box(0.246, 'X (time)', lambda tx: [ax1.set_xlabel(tx), ax2.set_xlabel(tx)],
+    make_label_box(0.250, 'X (time)', lambda tx: [ax1.set_xlabel(tx), ax2.set_xlabel(tx)],
                    ax2.get_xlabel())
-    make_label_box(0.222, 'Y force', lambda tx: ax1.set_ylabel(tx), ax1.get_ylabel())
-    make_label_box(0.198, 'Y moment', lambda tx: ax2.set_ylabel(tx), ax2.get_ylabel())
+    make_label_box(0.226, 'Y force', lambda tx: ax1.set_ylabel(tx), ax1.get_ylabel())
+    make_label_box(0.202, 'Y moment', lambda tx: ax2.set_ylabel(tx), ax2.get_ylabel())
 
     # =====================================================================
     #  6) Save image（力だけ / モーメントだけ のクリーンな単体PNG）
     # =====================================================================
-    card(0.144, 0.190)
-    head(L + 0.006, 0.182, 'Save image')
-    save_status = fig.text(R - 0.006, 0.182, 'Force / Moment -> PNG',
+    card(0.126, 0.186)
+    head(L + 0.006, 0.176, 'Save image')
+    save_status = fig.text(R - 0.006, 0.176, 'Force / Moment -> PNG',
                            fontsize=8, color=SUB_C, ha='right', va='center')
 
     def save_cb(which):
@@ -913,24 +913,24 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
                 save_status.set_color('#b00020')
             fig.canvas.draw_idle()
         return f
-    button_row(0.150, 0.030, [('Force', 'f'), ('Moment', 'm')], save_cb, hover='#bfe3bf')
+    button_row(0.134, 0.030, [('Force', 'f'), ('Moment', 'm')], save_cb, hover='#bfe3bf')
 
     # =====================================================================
     #  6b) L/R summary（左右サマリ。端末と同じ数値を画面でも表示。--sides のとき）
     # =====================================================================
-    card(0.040, 0.138)
-    head(L + 0.006, 0.130, 'L/R summary')
+    card(0.036, 0.116)
+    head(L + 0.006, 0.108, 'L/R summary')
     _side_txt = getattr(fig, '_side_summary_text', None)
-    fig.text(L + 0.006, 0.118,
+    fig.text(L + 0.006, 0.096,
              _side_txt if _side_txt else '(shown in --sides / plot_sides mode)',
              fontsize=8.0 if _side_txt else 8, color=HEAD_C if _side_txt else SUB_C,
              ha='left', va='top', family='monospace' if _side_txt else None,
-             linespacing=1.35)
+             linespacing=1.3)
 
     # =====================================================================
     #  7) Title（グラフのキャプション。画面表示のみ。保存画像には入らない）
     # =====================================================================
-    tb_title = TextBox(fig.add_axes([0.735, 0.006, 0.250, 0.024]), 'Title ',
+    tb_title = TextBox(fig.add_axes([0.735, 0.008, 0.250, 0.022]), 'Title ',
                        initial=fig._fml.get('title_text', '') if hasattr(fig, '_fml') else '')
 
     def on_title(text):
