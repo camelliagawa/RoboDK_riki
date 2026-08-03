@@ -468,6 +468,19 @@ def make_figure(d, s, title, contact=None, style=None, fig=None):
     _refresh_legend(ax1, lines, ('fx', 'fy', 'fz', 'fmag'), leg)
     _refresh_legend(ax2, lines, ('mx', 'my', 'mz', 'mmag'), leg)
 
+    # --- 左右(HaR/HaL)サマリを力グラフ上に重ねる（--sides のときだけ）---
+    #   端末に出しているのと同じ数値を画面でも見えるように。ASCIIのみ（豆腐回避）。
+    #   保存PNGには入れない（savefig時に隠す。save_axes_region も同様に隠す）。
+    fig._sidetext = None
+    if S.get('show_side_summary'):
+        txt = sides_overlay_text(d)
+        if txt:
+            fig._sidetext = ax1.text(
+                0.008, 0.975, txt, transform=ax1.transAxes, va='top', ha='left',
+                family='monospace', fontsize=8.5, color='#222222', zorder=6,
+                bbox=dict(boxstyle='round,pad=0.4', facecolor='white',
+                          edgecolor='#c8ccd2', alpha=0.85))
+
     # --- 表示する時間範囲（xlim）---
     if S['xlim_min'] is not None or S['xlim_max'] is not None:
         ax1.set_xlim(S['xlim_min'], S['xlim_max'])
@@ -510,9 +523,12 @@ def save_axes_region(fig, axes_list, out_path, dpi):
     現在の見た目（色・表示ON/OFF・範囲など操作パネルでの変更）を反映する。
     保存画像にはタイトル（キャプション）は入れない（画面表示上は残す）。"""
     from matplotlib.transforms import Bbox
-    # タイトルを一時的に隠して保存（tightbbox もタイトル分を確保しなくなる）
+    # タイトル・左右サマリを一時的に隠して保存（tightbbox もその分を確保しなくなる）
     hidden = [ax.title for ax in fig.axes
               if ax.title.get_text() and ax.title.get_visible()]
+    st = getattr(fig, '_sidetext', None)
+    if st is not None and st.get_visible():
+        hidden.append(st)
     for t in hidden:
         t.set_visible(False)
     try:
@@ -722,10 +738,20 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
     # =====================================================================
     card(0.498, 0.642)
     head(L + 0.006, 0.630, 'View range')
-    note(L + 0.006, 0.613, 'type "min  max", Enter  ·  empty = Auto')
+    b_auto = Button(fig.add_axes([0.820, 0.620, 0.108, 0.020]), 'Auto range',
+                    color=BTN_C, hovercolor=BTN_HOVER)
+    b_auto.label.set_fontsize(9.0)
+
+    def on_auto(_):
+        for ax in (ax1, ax2):
+            ax.relim(); ax.autoscale()
+        fig.canvas.draw_idle()
+    b_auto.on_clicked(on_auto); keep.append(b_auto)
+
+    note(L + 0.006, 0.606, 'X/F/M: zoom (Auto resets).  Trim: delete points.')
 
     def make_range_box(y, label, ax_target, axis):
-        tb = TextBox(fig.add_axes([0.748, y, 0.160, 0.026]), label, initial='')
+        tb = TextBox(fig.add_axes([0.748, y, 0.160, 0.024]), label, initial='')
 
         def submit(text):
             text = text.strip()
@@ -739,52 +765,53 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
             except Exception:
                 pass
         tb.on_submit(submit); keep.append(tb)
-    make_range_box(0.585, 'X [s]', ax1, 'x')
-    make_range_box(0.557, 'F [N]', ax1, 'y')
-    make_range_box(0.529, 'M [Nm]', ax2, 'y')
+    make_range_box(0.580, 'X [s]', ax1, 'x')
+    make_range_box(0.554, 'F [N]', ax1, 'y')
+    make_range_box(0.528, 'M [Nm]', ax2, 'y')
 
-    # --- Trim: 「研磨でない山」（末尾の退避・冒頭の突入）をデータごと消す ---
-    #   View range(X[s]) は軸のズームだけ（データは残り Auto で戻る）。Trim は範囲外の
-    #   点を線データから実際に取り除くので、Auto range を押しても戻らない＝グラフから
-    #   完全に消える。空欄+Enter で復元。端末の左右統計は起動時の値なので、数値も
-    #   合わせたいときは端末で plot_sides.bat --trim - 254 のように再実行する。
-    _orig_xy = {}   # key -> (xdata, ydata) 元データを一度だけ退避
+    # --- Trim: delete the "non-grinding" peaks (retract at the end / entry at
+    #   the start) from the data itself. Unlike X[s] zoom (view only, Auto
+    #   restores), Trim removes the points from the lines, so Auto range does
+    #   not bring them back. Enter a number in min and/or max; leave a box empty
+    #   for "no limit"; clear both + Enter to restore. The terminal L/R summary
+    #   uses the startup values, so to update the numbers too, rerun from the
+    #   terminal, e.g.  plot_sides.bat --trim 0 254
+    _orig_xy = {}   # key -> (xdata, ydata): stash originals once
 
-    def do_trim(text):
-        text = text.strip()
+    def _num(s):
+        s = s.strip()
+        if s in ('', '-', 'auto'):
+            return None
+        try:
+            return float(s.replace(',', ''))
+        except ValueError:
+            return None
+
+    def apply_trim(_=None):
+        lo = _num(tb_trim_min.text)
+        hi = _num(tb_trim_max.text)
         for key, ln in lines.items():
             if key not in _orig_xy:
                 _orig_xy[key] = (list(ln.get_xdata()), list(ln.get_ydata()))
             ox, oy = _orig_xy[key]
-            if text == '':
-                ln.set_data(ox, oy)                      # 元に戻す
+            if lo is None and hi is None:
+                ln.set_data(ox, oy)                      # both empty -> restore
                 continue
-            try:
-                a, b = text.replace(',', ' ').split()
-                lo = None if a in ('-', 'auto') else float(a)
-                hi = None if b in ('-', 'auto') else float(b)
-            except Exception:
-                return
             keep_xy = [(x, y) for x, y in zip(ox, oy)
                        if (lo is None or x >= lo) and (hi is None or x <= hi)]
             ln.set_data([p[0] for p in keep_xy], [p[1] for p in keep_xy])
         for ax in (ax1, ax2):
             ax.relim(); ax.autoscale()
         fig.canvas.draw_idle()
-    tb_trim = TextBox(fig.add_axes([0.720, 0.503, 0.098, 0.024]), 'Trim[s]',
-                      initial='')
-    tb_trim.label.set_fontsize(9.0)
-    tb_trim.on_submit(do_trim); keep.append(tb_trim)
 
-    b_auto = Button(fig.add_axes([0.828, 0.503, 0.100, 0.024]), 'Auto range',
-                    color=BTN_C, hovercolor=BTN_HOVER)
-    b_auto.label.set_fontsize(9.0)
-
-    def on_auto(_):
-        for ax in (ax1, ax2):
-            ax.relim(); ax.autoscale()
-        fig.canvas.draw_idle()
-    b_auto.on_clicked(on_auto); keep.append(b_auto)
+    note(L + 0.006, 0.508, 'Trim [s]')
+    tb_trim_min = TextBox(fig.add_axes([0.760, 0.500, 0.075, 0.024]), 'min',
+                          initial='')
+    tb_trim_max = TextBox(fig.add_axes([0.900, 0.500, 0.075, 0.024]), 'max',
+                          initial='')
+    for _tb in (tb_trim_min, tb_trim_max):
+        _tb.label.set_fontsize(9.0)
+        _tb.on_submit(apply_trim); keep.append(_tb)
 
     # =====================================================================
     #  3) Colors（配色テーマ）
@@ -1186,6 +1213,47 @@ def side_summary(d, split, right_first=True):
     return out
 
 
+def side_summary_gui(d, split, right_first=True):
+    """側別サマリを ASCII だけの1文字列で返す（matplotlib描画用）。
+
+    グラフ上に重ねる用。日本語はmatplotlibの既定フォントで豆腐になるため英数字のみ。
+    side_summary と同じ統計（>0のサンプルの n/平均/中央/p90/最大）を計算する。
+    """
+    t, F = d['t_s'], d['Fmag_N']
+
+    def stat(a, b):
+        v = sorted(F[i] for i in range(len(t)) if a <= t[i] < b and F[i] > 0.0)
+        if not v:
+            return None
+        n = len(v)
+        return (n, sum(v) / n, v[n // 2], v[int(n * 0.9)], v[-1])
+
+    first, second = stat(t[0], split), stat(split, t[-1])
+    right, left = (first, second) if right_first else (second, first)
+    rows = ['L/R contact |F|   split t=%.1fs' % split,
+            '       mean  med   p90   max     n']
+    for nm, s in (('HaR', right), ('HaL', left)):
+        rows.append('%-4s %5.2f %5.2f %5.2f %5.2f %5d'
+                    % (nm, s[1], s[2], s[3], s[4], s[0]) if s else '%-4s  (no data)' % nm)
+    if right and left and right[2] > 0:
+        rows.append('L/R median ratio %.2f  (1.0=even)' % (left[2] / right[2]))
+    return '\n'.join(rows)
+
+
+def sides_overlay_text(d):
+    """d から境界と左右を自動判定し、GUI用のASCIIサマリ文字列を返す（不可なら None）。"""
+    t, F = d['t_s'], d['Fmag_N']
+    if len(t) < 20:
+        return None
+    split = detect_phase_split(t, list(F))
+    if split is None:
+        return None
+    fr = [F[i] for i in range(len(t)) if t[i] < split]
+    fl = [F[i] for i in range(len(t)) if t[i] >= split]
+    right_first = _median(fr) >= _median(fl)
+    return side_summary_gui(d, split, right_first)
+
+
 def auto_zero(d, active_thr=0.5, split=None, ref_frac=0.15):
     """空運転CSVなしで、各サイド(HaR/HaL)の重力オフセットを自分自身から推定して差し引く。
 
@@ -1426,6 +1494,7 @@ def main():
 
     # デザイン設定を読み込み（plot_config.json → 実行時オプションの順で上書き）
     style = load_style(here)
+    style['show_side_summary'] = bool(args.sides)   # 左右サマリをグラフに重ねる
     if args.xlim:
         style['xlim_min'], style['xlim_max'] = args.xlim
     if args.ylim_force:
@@ -1472,8 +1541,14 @@ def main():
     png = base + '.png'
     _title_vis = ax1.title.get_visible()
     ax1.title.set_visible(False)
+    _st = getattr(fig, '_sidetext', None)
+    _st_vis = _st.get_visible() if _st is not None else False
+    if _st is not None:
+        _st.set_visible(False)          # 保存PNGには左右サマリを入れない
     fig.savefig(png, dpi=style['dpi'])
     ax1.title.set_visible(_title_vis)
+    if _st is not None:
+        _st.set_visible(_st_vis)
     print('グラフを保存 :', png)
 
     # 力/モーメントを別々のPNGにも保存（--save-split）
