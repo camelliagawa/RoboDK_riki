@@ -722,10 +722,20 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
     # =====================================================================
     card(0.498, 0.642)
     head(L + 0.006, 0.630, 'View range')
-    note(L + 0.006, 0.613, 'type "min  max", Enter  ·  empty = Auto')
+    b_auto = Button(fig.add_axes([0.820, 0.620, 0.108, 0.020]), 'Auto range',
+                    color=BTN_C, hovercolor=BTN_HOVER)
+    b_auto.label.set_fontsize(9.0)
+
+    def on_auto(_):
+        for ax in (ax1, ax2):
+            ax.relim(); ax.autoscale()
+        fig.canvas.draw_idle()
+    b_auto.on_clicked(on_auto); keep.append(b_auto)
+
+    note(L + 0.006, 0.606, 'X/F/M: zoom (Auto resets).  Trim: delete points.')
 
     def make_range_box(y, label, ax_target, axis):
-        tb = TextBox(fig.add_axes([0.748, y, 0.160, 0.026]), label, initial='')
+        tb = TextBox(fig.add_axes([0.748, y, 0.160, 0.024]), label, initial='')
 
         def submit(text):
             text = text.strip()
@@ -739,52 +749,53 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
             except Exception:
                 pass
         tb.on_submit(submit); keep.append(tb)
-    make_range_box(0.585, 'X [s]', ax1, 'x')
-    make_range_box(0.557, 'F [N]', ax1, 'y')
-    make_range_box(0.529, 'M [Nm]', ax2, 'y')
+    make_range_box(0.580, 'X [s]', ax1, 'x')
+    make_range_box(0.554, 'F [N]', ax1, 'y')
+    make_range_box(0.528, 'M [Nm]', ax2, 'y')
 
-    # --- Trim: 「研磨でない山」（末尾の退避・冒頭の突入）をデータごと消す ---
-    #   View range(X[s]) は軸のズームだけ（データは残り Auto で戻る）。Trim は範囲外の
-    #   点を線データから実際に取り除くので、Auto range を押しても戻らない＝グラフから
-    #   完全に消える。空欄+Enter で復元。端末の左右統計は起動時の値なので、数値も
-    #   合わせたいときは端末で plot_sides.bat --trim - 254 のように再実行する。
-    _orig_xy = {}   # key -> (xdata, ydata) 元データを一度だけ退避
+    # --- Trim: delete the "non-grinding" peaks (retract at the end / entry at
+    #   the start) from the data itself. Unlike X[s] zoom (view only, Auto
+    #   restores), Trim removes the points from the lines, so Auto range does
+    #   not bring them back. Enter a number in min and/or max; leave a box empty
+    #   for "no limit"; clear both + Enter to restore. The terminal L/R summary
+    #   uses the startup values, so to update the numbers too, rerun from the
+    #   terminal, e.g.  plot_sides.bat --trim 0 254
+    _orig_xy = {}   # key -> (xdata, ydata): stash originals once
 
-    def do_trim(text):
-        text = text.strip()
+    def _num(s):
+        s = s.strip()
+        if s in ('', '-', 'auto'):
+            return None
+        try:
+            return float(s.replace(',', ''))
+        except ValueError:
+            return None
+
+    def apply_trim(_=None):
+        lo = _num(tb_trim_min.text)
+        hi = _num(tb_trim_max.text)
         for key, ln in lines.items():
             if key not in _orig_xy:
                 _orig_xy[key] = (list(ln.get_xdata()), list(ln.get_ydata()))
             ox, oy = _orig_xy[key]
-            if text == '':
-                ln.set_data(ox, oy)                      # 元に戻す
+            if lo is None and hi is None:
+                ln.set_data(ox, oy)                      # both empty -> restore
                 continue
-            try:
-                a, b = text.replace(',', ' ').split()
-                lo = None if a in ('-', 'auto') else float(a)
-                hi = None if b in ('-', 'auto') else float(b)
-            except Exception:
-                return
             keep_xy = [(x, y) for x, y in zip(ox, oy)
                        if (lo is None or x >= lo) and (hi is None or x <= hi)]
             ln.set_data([p[0] for p in keep_xy], [p[1] for p in keep_xy])
         for ax in (ax1, ax2):
             ax.relim(); ax.autoscale()
         fig.canvas.draw_idle()
-    tb_trim = TextBox(fig.add_axes([0.720, 0.503, 0.098, 0.024]), 'Trim[s]',
-                      initial='')
-    tb_trim.label.set_fontsize(9.0)
-    tb_trim.on_submit(do_trim); keep.append(tb_trim)
 
-    b_auto = Button(fig.add_axes([0.828, 0.503, 0.100, 0.024]), 'Auto range',
-                    color=BTN_C, hovercolor=BTN_HOVER)
-    b_auto.label.set_fontsize(9.0)
-
-    def on_auto(_):
-        for ax in (ax1, ax2):
-            ax.relim(); ax.autoscale()
-        fig.canvas.draw_idle()
-    b_auto.on_clicked(on_auto); keep.append(b_auto)
+    note(L + 0.006, 0.508, 'Trim [s]')
+    tb_trim_min = TextBox(fig.add_axes([0.760, 0.500, 0.075, 0.024]), 'min',
+                          initial='')
+    tb_trim_max = TextBox(fig.add_axes([0.900, 0.500, 0.075, 0.024]), 'max',
+                          initial='')
+    for _tb in (tb_trim_min, tb_trim_max):
+        _tb.label.set_fontsize(9.0)
+        _tb.on_submit(apply_trim); keep.append(_tb)
 
     # =====================================================================
     #  3) Colors（配色テーマ）
