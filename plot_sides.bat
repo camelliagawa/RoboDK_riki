@@ -10,11 +10,17 @@ rem  any engagement/speed as long as the tool and angles match.
 rem  If no air.csv is found it falls back to a rough auto-zero.
 rem
 rem  Needs matplotlib: pip install matplotlib
-rem ============================================================
-rem  末尾/冒頭の「研磨でない山」を消したいときは Trim を使う。例:
-rem     plot_sides.bat --trim - 254     （254秒より後を丸ごと除外）
-rem  追加の引数(%*)はそのまま plot_force_log.py に渡ります。
 rem
-rem  起動時に自動で最新版へ更新します（git pull）。更新できない環境（gitが無い/
-rem  ネット不通/ローカル変更あり）でも、そのまま今の版で起動します。
-powershell -NoExit -ExecutionPolicy Bypass -Command "Set-Location -LiteralPath '%~dp0'; Write-Host 'Updating to latest (git pull)...'; git pull; python plot_force_log.py --sides --auto-baseline --panel %*"
+rem  This launcher auto-updates to the latest version (git pull)
+rem  before starting. If git / network / local changes block the
+rem  pull, it still launches the current version.
+rem
+rem  To drop non-grinding peaks (retract spike at the end, entry
+rem  spike at the start), use Trim. Example:
+rem      plot_sides.bat --trim 0 254
+rem  Extra args (%*) are passed straight to plot_force_log.py.
+rem
+rem  NOTE: keep this file ASCII-only. Non-ASCII text (e.g.
+rem  Japanese) can break the shortcut on non-UTF-8 code pages.
+rem ============================================================
+powershell -NoExit -ExecutionPolicy Bypass -Command "Set-Location -LiteralPath '%~dp0'; $env:GIT_TERMINAL_PROMPT=0; Write-Host 'Updating to latest (git pull)...'; git pull; python plot_force_log.py --sides --auto-baseline --panel %*"
