@@ -468,18 +468,11 @@ def make_figure(d, s, title, contact=None, style=None, fig=None):
     _refresh_legend(ax1, lines, ('fx', 'fy', 'fz', 'fmag'), leg)
     _refresh_legend(ax2, lines, ('mx', 'my', 'mz', 'mmag'), leg)
 
-    # --- 左右(HaR/HaL)サマリを力グラフ上に重ねる（--sides のときだけ）---
-    #   端末に出しているのと同じ数値を画面でも見えるように。ASCIIのみ（豆腐回避）。
-    #   保存PNGには入れない（savefig時に隠す。save_axes_region も同様に隠す）。
-    fig._sidetext = None
-    if S.get('show_side_summary'):
-        txt = sides_overlay_text(d)
-        if txt:
-            fig._sidetext = ax1.text(
-                0.008, 0.975, txt, transform=ax1.transAxes, va='top', ha='left',
-                family='monospace', fontsize=8.5, color='#222222', zorder=6,
-                bbox=dict(boxstyle='round,pad=0.4', facecolor='white',
-                          edgecolor='#c8ccd2', alpha=0.85))
+    # --- 左右(HaR/HaL)サマリ文字列を用意（--sides のとき。表示は操作パネル下部）---
+    #   端末と同じ数値を画面でも見えるように。ASCIIのみ（matplotlibで豆腐回避）。
+    #   パネルにのみ描くので保存PNGには入らない。
+    fig._side_summary_text = (
+        sides_overlay_text(d) if S.get('show_side_summary') else None)
 
     # --- 表示する時間範囲（xlim）---
     if S['xlim_min'] is not None or S['xlim_max'] is not None:
@@ -523,12 +516,9 @@ def save_axes_region(fig, axes_list, out_path, dpi):
     現在の見た目（色・表示ON/OFF・範囲など操作パネルでの変更）を反映する。
     保存画像にはタイトル（キャプション）は入れない（画面表示上は残す）。"""
     from matplotlib.transforms import Bbox
-    # タイトル・左右サマリを一時的に隠して保存（tightbbox もその分を確保しなくなる）
+    # タイトルを一時的に隠して保存（tightbbox もタイトル分を確保しなくなる）
     hidden = [ax.title for ax in fig.axes
               if ax.title.get_text() and ax.title.get_visible()]
-    st = getattr(fig, '_sidetext', None)
-    if st is not None and st.get_visible():
-        hidden.append(st)
     for t in hidden:
         t.set_visible(False)
     try:
@@ -883,29 +873,28 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
     # =====================================================================
     #  5) Axis labels（縦軸・横軸の表記を自由に変更）
     # =====================================================================
-    card(0.148, 0.272)
-    head(L + 0.006, 0.260, 'Axis labels')
-    note(0.792, 0.260, 'Enter to apply')
+    card(0.196, 0.276)
+    head(L + 0.006, 0.268, 'Axis labels')
+    note(R - 0.006, 0.268, 'Enter to apply', ha='right')
 
     def make_label_box(y, label, setter, initial):
-        tb = TextBox(fig.add_axes([0.775, y, 0.133, 0.026]), label, initial=initial)
+        tb = TextBox(fig.add_axes([0.775, y, 0.133, 0.022]), label, initial=initial)
 
         def submit(text):
             setter(text); fig.canvas.draw_idle()
         tb.on_submit(submit); keep.append(tb)
-    make_label_box(0.226, 'X (time)', lambda tx: [ax1.set_xlabel(tx), ax2.set_xlabel(tx)],
+    make_label_box(0.246, 'X (time)', lambda tx: [ax1.set_xlabel(tx), ax2.set_xlabel(tx)],
                    ax2.get_xlabel())
-    make_label_box(0.194, 'Y force', lambda tx: ax1.set_ylabel(tx), ax1.get_ylabel())
-    make_label_box(0.162, 'Y moment', lambda tx: ax2.set_ylabel(tx), ax2.get_ylabel())
+    make_label_box(0.222, 'Y force', lambda tx: ax1.set_ylabel(tx), ax1.get_ylabel())
+    make_label_box(0.198, 'Y moment', lambda tx: ax2.set_ylabel(tx), ax2.get_ylabel())
 
     # =====================================================================
     #  6) Save image（力だけ / モーメントだけ のクリーンな単体PNG）
     # =====================================================================
-    card(0.048, 0.136)
-    head(L + 0.006, 0.124, 'Save image')
-    save_status = fig.text(L + 0.006, 0.061,
-                           'saves Force / Moment as separate clean PNGs (no title)',
-                           fontsize=8, color=SUB_C, ha='left', va='center')
+    card(0.144, 0.190)
+    head(L + 0.006, 0.182, 'Save image')
+    save_status = fig.text(R - 0.006, 0.182, 'Force / Moment -> PNG',
+                           fontsize=8, color=SUB_C, ha='right', va='center')
 
     def save_cb(which):
         def f(_e):
@@ -924,12 +913,24 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
                 save_status.set_color('#b00020')
             fig.canvas.draw_idle()
         return f
-    button_row(0.080, 0.036, [('Force', 'f'), ('Moment', 'm')], save_cb, hover='#bfe3bf')
+    button_row(0.150, 0.030, [('Force', 'f'), ('Moment', 'm')], save_cb, hover='#bfe3bf')
+
+    # =====================================================================
+    #  6b) L/R summary（左右サマリ。端末と同じ数値を画面でも表示。--sides のとき）
+    # =====================================================================
+    card(0.040, 0.138)
+    head(L + 0.006, 0.130, 'L/R summary')
+    _side_txt = getattr(fig, '_side_summary_text', None)
+    fig.text(L + 0.006, 0.118,
+             _side_txt if _side_txt else '(shown in --sides / plot_sides mode)',
+             fontsize=8.0 if _side_txt else 8, color=HEAD_C if _side_txt else SUB_C,
+             ha='left', va='top', family='monospace' if _side_txt else None,
+             linespacing=1.35)
 
     # =====================================================================
     #  7) Title（グラフのキャプション。画面表示のみ。保存画像には入らない）
     # =====================================================================
-    tb_title = TextBox(fig.add_axes([0.735, 0.014, 0.250, 0.030]), 'Title ',
+    tb_title = TextBox(fig.add_axes([0.735, 0.006, 0.250, 0.024]), 'Title ',
                        initial=fig._fml.get('title_text', '') if hasattr(fig, '_fml') else '')
 
     def on_title(text):
@@ -1541,14 +1542,8 @@ def main():
     png = base + '.png'
     _title_vis = ax1.title.get_visible()
     ax1.title.set_visible(False)
-    _st = getattr(fig, '_sidetext', None)
-    _st_vis = _st.get_visible() if _st is not None else False
-    if _st is not None:
-        _st.set_visible(False)          # 保存PNGには左右サマリを入れない
     fig.savefig(png, dpi=style['dpi'])
     ax1.title.set_visible(_title_vis)
-    if _st is not None:
-        _st.set_visible(_st_vis)
     print('グラフを保存 :', png)
 
     # 力/モーメントを別々のPNGにも保存（--save-split）
