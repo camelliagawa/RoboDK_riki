@@ -173,6 +173,24 @@ def load_log(path):
     return cols
 
 
+def crop_time(d, tmin=None, tmax=None):
+    """時刻 t_s が [tmin, tmax] の行だけを残して d を破壊的に切り詰める。
+
+    tmin/tmax は None で「制限なし」。研磨開始直後の突入スパイクや、末尾の
+    退避（後退）でできる「研磨でない山」をグラフと統計の両方から丸ごと除ける。
+    残った行数を返す（0 なら呼び出し側で元に戻す等の判断に使う）。
+    """
+    t = d['t_s']
+    keep = [i for i in range(len(t))
+            if (tmin is None or t[i] >= tmin) and (tmax is None or t[i] <= tmax)]
+    if len(keep) == len(t):
+        return len(t)
+    for k in d:
+        col = d[k]
+        d[k] = [col[i] for i in keep]
+    return len(keep)
+
+
 # force_log CSV に必須の列（これが揃っていないものは「関係ないCSV」とみなす）
 REQUIRED_COLS = ('t_s', 'fx_N', 'fy_N', 'fz_N', 'mx_Nm', 'my_Nm', 'mz_Nm',
                  'Fmag_N', 'Mmag_Nm')
@@ -700,7 +718,7 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
             _do()   # タイマ非対応バックエンドでは即実行
 
     # =====================================================================
-    #  2) View range
+    #  2) View range / Trim
     # =====================================================================
     card(0.498, 0.642)
     head(L + 0.006, 0.630, 'View range')
@@ -721,10 +739,44 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
             except Exception:
                 pass
         tb.on_submit(submit); keep.append(tb)
-    make_range_box(0.582, 'X [s]', ax1, 'x')
-    make_range_box(0.552, 'F [N]', ax1, 'y')
-    make_range_box(0.522, 'M [Nm]', ax2, 'y')
-    b_auto = Button(fig.add_axes([0.748, 0.500, 0.160, 0.020]), 'Auto range',
+    make_range_box(0.585, 'X [s]', ax1, 'x')
+    make_range_box(0.557, 'F [N]', ax1, 'y')
+    make_range_box(0.529, 'M [Nm]', ax2, 'y')
+
+    # --- Trim: 「研磨でない山」（末尾の退避・冒頭の突入）をデータごと消す ---
+    #   View range(X[s]) は軸のズームだけ（データは残り Auto で戻る）。Trim は範囲外の
+    #   点を線データから実際に取り除くので、Auto range を押しても戻らない＝グラフから
+    #   完全に消える。空欄+Enter で復元。端末の左右統計は起動時の値なので、数値も
+    #   合わせたいときは端末で plot_sides.bat --trim - 254 のように再実行する。
+    _orig_xy = {}   # key -> (xdata, ydata) 元データを一度だけ退避
+
+    def do_trim(text):
+        text = text.strip()
+        for key, ln in lines.items():
+            if key not in _orig_xy:
+                _orig_xy[key] = (list(ln.get_xdata()), list(ln.get_ydata()))
+            ox, oy = _orig_xy[key]
+            if text == '':
+                ln.set_data(ox, oy)                      # 元に戻す
+                continue
+            try:
+                a, b = text.replace(',', ' ').split()
+                lo = None if a in ('-', 'auto') else float(a)
+                hi = None if b in ('-', 'auto') else float(b)
+            except Exception:
+                return
+            keep_xy = [(x, y) for x, y in zip(ox, oy)
+                       if (lo is None or x >= lo) and (hi is None or x <= hi)]
+            ln.set_data([p[0] for p in keep_xy], [p[1] for p in keep_xy])
+        for ax in (ax1, ax2):
+            ax.relim(); ax.autoscale()
+        fig.canvas.draw_idle()
+    tb_trim = TextBox(fig.add_axes([0.720, 0.503, 0.098, 0.024]), 'Trim[s]',
+                      initial='')
+    tb_trim.label.set_fontsize(9.0)
+    tb_trim.on_submit(do_trim); keep.append(tb_trim)
+
+    b_auto = Button(fig.add_axes([0.828, 0.503, 0.100, 0.024]), 'Auto range',
                     color=BTN_C, hovercolor=BTN_HOVER)
     b_auto.label.set_fontsize(9.0)
 
@@ -1221,7 +1273,11 @@ def main():
     # --- 見た目（デザイン）の実行時オプション。恒久的に変えるなら STYLE か plot_config.json ---
     ap.add_argument('--title', help='グラフのタイトル文字列（既定は自動生成）')
     ap.add_argument('--xlim', nargs=2, type=float, metavar=('MIN', 'MAX'),
-                    help='時間軸の表示範囲[s] 例: --xlim 0 150')
+                    help='時間軸の表示範囲[s]（軸の見た目だけ。データは残る）例: --xlim 0 150')
+    ap.add_argument('--trim', nargs=2, metavar=('MIN', 'MAX'),
+                    help='この時刻[s]の範囲だけを残してデータ自体を切り詰める（グラフも'
+                         '左右統計も対象外になる）。開放端は - を渡す。'
+                         '例: 末尾の退避スパイクを消す→ --trim - 254')
     ap.add_argument('--ylim-force', nargs=2, type=float, metavar=('MIN', 'MAX'),
                     help='力[N]の縦軸範囲 例: --ylim-force -2 10')
     ap.add_argument('--ylim-moment', nargs=2, type=float, metavar=('MIN', 'MAX'),
@@ -1280,6 +1336,21 @@ def main():
     if not d['t_s']:
         print('データ行がありません:', path)
         return 2
+
+    # --trim: 指定した時刻範囲の外をデータごと削除（グラフも左右統計も対象外になる）。
+    # 末尾の退避スパイクや冒頭の突入スパイクなど「研磨でない山」を丸ごと除くのに使う。
+    if args.trim:
+        def _bound(s):
+            s = s.strip()
+            return None if s in ('', '-', 'auto', 'None') else float(s)
+        tmin, tmax = _bound(args.trim[0]), _bound(args.trim[1])
+        before = len(d['t_s'])
+        n = crop_time(d, tmin, tmax)
+        if n == 0:
+            print('--trim の範囲にデータがありません（範囲を見直してください）:', args.trim)
+            return 2
+        print('データ切り詰め --trim %s〜%s s : %d→%d 点（%.1f〜%.1f s を採用）'
+              % (args.trim[0], args.trim[1], before, n, d['t_s'][0], d['t_s'][-1]))
 
     # 左右の境界は「差引前の生波形」で検出（HaR≈高 / HaL≈低 のコントラストが強く確実）
     split_t = None
