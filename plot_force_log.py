@@ -728,7 +728,7 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
     # =====================================================================
     card(0.516, 0.690)
     head(L + 0.006, 0.678, 'View range')
-    b_auto = Button(fig.add_axes([0.820, 0.668, 0.108, 0.020]), 'Auto range',
+    b_auto = Button(fig.add_axes([0.820, 0.668, 0.108, 0.020]), 'Auto all',
                     color=BTN_C, hovercolor=BTN_HOVER)
     b_auto.label.set_fontsize(9.0)
 
@@ -738,23 +738,33 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
         fig.canvas.draw_idle()
     b_auto.on_clicked(on_auto); keep.append(b_auto)
 
-    note(L + 0.006, 0.658, 'X/F/M: zoom (Auto resets).  Trim: delete points.')
+    note(L + 0.006, 0.658, 'type "min  max" + Enter to set  ·  auto = autoscale that axis')
+
+    def _autoscale_axis(ax_target, axis):
+        ax_target.relim()
+        ax_target.autoscale(enable=True, axis=axis)
+        fig.canvas.draw_idle()
 
     def make_range_box(y, label, ax_target, axis):
-        tb = TextBox(fig.add_axes([0.748, y, 0.160, 0.022]), label, initial='')
+        # 範囲入力欄（min max）＋その軸だけのオートスケール "auto" ボタンを1行に置く
+        tb = TextBox(fig.add_axes([0.712, y, 0.190, 0.022]), label, initial='')
 
         def submit(text):
             text = text.strip()
             try:
                 if text == '':
-                    ax_target.autoscale(axis=axis)
+                    _autoscale_axis(ax_target, axis)
                 else:
                     a, b = text.replace(',', ' ').split()
                     (ax_target.set_xlim if axis == 'x' else ax_target.set_ylim)(float(a), float(b))
-                fig.canvas.draw_idle()
+                    fig.canvas.draw_idle()
             except Exception:
                 pass
         tb.on_submit(submit); keep.append(tb)
+        b = Button(fig.add_axes([0.910, y, 0.070, 0.022]), 'auto',
+                   color=BTN_C, hovercolor=BTN_HOVER)
+        b.label.set_fontsize(8.5)
+        b.on_clicked(lambda _e: _autoscale_axis(ax_target, axis)); keep.append(b)
     make_range_box(0.626, 'X [s]', ax1, 'x')
     make_range_box(0.600, 'F [N]', ax1, 'y')
     make_range_box(0.574, 'M [Nm]', ax2, 'y')
