@@ -23,7 +23,15 @@ import argparse
 
 # 実行中のコードの版。機能を変えたら日付.通番を上げる。起動時に端末・ウィンドウ
 # タイトル・操作パネルに表示され、「いま最新版で動いているか」を判別できるようにする。
-APP_VERSION = '2026-08-03.1'
+APP_VERSION = '2026-09-24.1'
+
+# 研磨の順番。kenma は HaR→HaL なので 'RL'（前半=右）。左先に変えたら 'LR'（--order でも指定可）。
+# 以前は「生の重力|F|が高いブロック=右」で判定していたが、零点を取る姿勢(kenma P[1])で
+# 高低が入れ替わり左右を取り違えるため、時間順で決める。
+SIDE_ORDER = 'RL'
+# サイド別の微調整（歯の形の相関）がこれ未満なら微調整せず、J6反転の時刻合わせのみで差し引く。
+# （air の片側がほぼ平坦＝零点姿勢と同じ側だと、歯の形が無く相関で合わせられない）
+PERSIDE_MIN_CORR = 0.3
 
 # =====================================================================
 #  グラフのデザイン設定（ここを編集すれば見た目を自由に変更できます）
@@ -307,18 +315,24 @@ def apply_baseline(d, base, shift=0.0):
     return d
 
 
-def apply_baseline_persides(d, base):
+def apply_baseline_persides(d, base, order=None, base_order=None):
     """研磨(d)と空運転(base)を「右姿勢/左姿勢のブロック」に分け、サイドごとに整列して差し引く。
 
     重力は姿勢だけで決まり、空運転には右姿勢・左姿勢の両ブロックが入っている。各ブロックを
-    姿勢（=重力|F|レベル: 高い方=HaR右, 低い方=HaL左）で対応づけ、ブロック内の歯パターンで
-    個別整列して引く。**研磨の順番(右先/左先)を変えても、同じ空運転1本で差し引ける。**
-    境界検出に失敗したら全体整列にフォールバック。戻り値: 診断文字列リスト。
+    研磨の順番 order / base_order（'RL'=前半が右HaR、'LR'=前半が左HaL。省略時 SIDE_ORDER）で
+    対応づけ、ブロック内の歯パターンで個別整列して引く。研磨と空運転で順番が違っても、
+    それぞれの順番を渡せば同じ空運転1本で差し引ける。
+    順番が同じなら J6反転の時刻どうしを合わせ、±2s だけ歯の形で微調整する。相関が
+    PERSIDE_MIN_CORR 未満（空運転の片側が平坦で歯が無い等）なら微調整しない。
+    境界検出に失敗したら全体整列にフォールバック。
+    戻り値: 診断文字列リスト。
     """
+    order = order or SIDE_ORDER
+    base_order = base_order or order
     comps = ('fx_N', 'fy_N', 'fz_N', 'mx_Nm', 'my_Nm', 'mz_Nm', 'Fmag_N', 'Mmag_Nm')
     tg, ta = d['t_s'], base['t_s']
-    sg = detect_phase_split(tg, list(d['Fmag_N']))
-    sa = detect_phase_split(ta, list(base['Fmag_N']))
+    sg = detect_flip_split(d)
+    sa = detect_flip_split(base)
     if sg is None or sa is None:
         s, c = estimate_baseline_shift(d, base)
         apply_baseline(d, base, shift=s)
@@ -334,32 +348,39 @@ def apply_baseline_persides(d, base):
     gblocks = {'1': (0, gi), '2': (gi, len(tg))}
     ablocks = {'1': (0, ai), '2': (ai, len(ta))}
 
-    def med(d_, a, b):
-        v = sorted(d_['Fmag_N'][a:b])
-        return v[len(v) // 2] if v else 0.0
+    # 研磨の順番（時間順）で右/左を割り当てる。重力レベルの高低は零点姿勢で入れ替わるので使わない
+    def label(blocks, order_):
+        return {order_[0]: blocks['1'], order_[1]: blocks['2']}
 
-    # 重力|F|レベルが高いブロック=右(HaR), 低い方=左(HaL) と姿勢で判定
-    def label(d_, blocks):
-        m1, m2 = med(d_, *blocks['1']), med(d_, *blocks['2'])
-        return {'R': blocks['1'], 'L': blocks['2']} if m1 >= m2 \
-            else {'R': blocks['2'], 'L': blocks['1']}
-
-    gl, al = label(d, gblocks), label(base, ablocks)
-    out = ['サイド別に整列して差引（順番非依存）:']
+    gl, al = label(gblocks, order), label(ablocks, base_order)
+    same = (order == base_order)
+    out = ['サイド別に整列して差引（研磨順 %s / 空運転順 %s, 反転 研磨%.1fs / 空運転%.1fs）:'
+           % (order, base_order, sg, sa)]
     for side, jp in (('R', '右 HaR'), ('L', '左 HaL')):
         ga, gb = gl[side]
         aa, ab = al[side]
-        # ブロックを時刻0起点に揃えてから整列（絶対時刻が離れていてもマッチ可能に）
-        g0, a0 = tg[ga], ta[aa]
+        if same:
+            # 同じ順番なら「J6反転の時刻」どうしを合わせる（物理的な共通イベントで確実）。
+            # そこから ±2s だけ歯の形で微調整する。
+            g0, a0, lag = 0.0, sa - sg, 2.0
+        else:
+            # 順番が違うときはブロック先頭どうしを合わせて広く探す
+            g0, a0, lag = tg[ga], ta[aa], 20.0
         gsub = {k: (d[k][ga:gb] if k != 't_s' else [x - g0 for x in tg[ga:gb]])
                 for k in d}
         asub = {k: (base[k][aa:ab] if k != 't_s' else [x - a0 for x in ta[aa:ab]])
                 for k in base}
-        sh, c = estimate_baseline_shift(gsub, asub)
+        sh, c = estimate_baseline_shift(gsub, asub, max_lag=lag)
+        if c >= PERSIDE_MIN_CORR:
+            note = 'corr %.3f' % c
+        else:
+            # 空運転の片側が平坦（零点姿勢と同じ側）などで歯の形が無い → 微調整せず基準合わせのまま
+            sh = 0.0
+            note = 'corr %.3f が低い→微調整なし' % c
         apply_baseline(gsub, asub, shift=sh)
         for k in comps:
             d[k][ga:gb] = gsub[k]
-        out.append('  %s: shift %.2fs  corr %.3f' % (jp, sh, c))
+        out.append('  %s: 空運転を %+.2fs ずらして差引 (%s)' % (jp, (a0 - g0) + sh, note))
     return out
 
 
@@ -394,7 +415,7 @@ def _add_top_headroom(ax, frac=0.28):
     ax.set_ylim(y0, y1 + frac * (y1 - y0))
 
 
-def make_figure(d, s, title, contact=None, style=None, fig=None):
+def make_figure(d, s, title, contact=None, style=None, fig=None, split=None):
     import matplotlib.pyplot as plt
     S = style or STYLE
 
@@ -472,7 +493,7 @@ def make_figure(d, s, title, contact=None, style=None, fig=None):
     #   端末と同じ数値を画面でも見えるように。ASCIIのみ（matplotlibで豆腐回避）。
     #   パネルにのみ描くので保存PNGには入らない。
     fig._side_summary_text = (
-        sides_overlay_text(d) if S.get('show_side_summary') else None)
+        sides_overlay_text(d, split) if S.get('show_side_summary') else None)
 
     # --- 表示する時間範囲（xlim）---
     if S['xlim_min'] is not None or S['xlim_max'] is not None:
@@ -971,6 +992,7 @@ def render_csv(fig, path, style, contact, baseline_on=False, with_panel=True):
     air = _find_air_csv([os.path.dirname(os.path.abspath(path)), here, os.getcwd(),
                          os.path.join(here, 'samples')])
     note, applied = '', False
+    split = detect_flip_split(d)     # 差引前の生波形で左右の境界を検出
     if baseline_on and air:
         base = load_log(air)
         if base['t_s']:
@@ -987,7 +1009,7 @@ def render_csv(fig, path, style, contact, baseline_on=False, with_panel=True):
         except Exception:
             pass
     fig._panel_widgets = []
-    make_figure(d, s, title, contact=contact, style=style, fig=fig)
+    make_figure(d, s, title, contact=contact, style=style, fig=fig, split=split)
     fig._plotstate = dict(csv=path, style=style, contact=contact, air=air,
                           baseline_on=applied, with_panel=with_panel)
     if with_panel:
@@ -1166,6 +1188,40 @@ def analyze_segments(d, thr):
     return lines, segs
 
 
+def detect_flip_split(d, lo_frac=0.3, hi_frac=0.7, win_s=10.0, step_s=0.1, min_step=2.0):
+    """J6反転（刃の裏返し）の時刻を、力ベクトルの重力段差から推定して返す。
+
+    反転の前後で工具自重の向きがセンサ座標で変わり、(fx,fy,fz) の水準が数N跳ぶ。
+    中央 lo..hi の範囲を step_s 刻みで走査し、「直前 win_s 秒の中央値」と「直後 win_s 秒の
+    中央値」の差ベクトルが最大になる時刻を境界とする。中央値なので研磨の接触力（窓の半分未満）に
+    引っ張られない。|F| の谷を探す detect_phase_split と違い、零点姿勢と同じ側が平坦
+    （空運転の片側など）でも外れない。段差が min_step[N] 未満なら |F| の谷方式に戻す。
+    """
+    t = d['t_s']
+    n = len(t)
+    if n < 10:
+        return None
+    dur = (t[-1] - t[0]) or 1.0
+    rate = n / dur
+    w = max(1, int(rate * win_s))
+    stride = max(1, int(rate * step_s))
+    comps = ('fx_N', 'fy_N', 'fz_N')
+
+    def med(col, a, b):
+        v = sorted(col[a:b])
+        return v[len(v) // 2]
+
+    lo, hi = max(w, int(n * lo_frac)), min(n - w, int(n * hi_frac))
+    best_i, best_v = None, -1.0
+    for i in range(lo, hi, stride):
+        v = sum((med(d[k], i, i + w) - med(d[k], i - w, i)) ** 2 for k in comps)
+        if v > best_v:
+            best_v, best_i = v, i
+    if best_i is None or best_v ** 0.5 < min_step:
+        return detect_phase_split(t, list(d['Fmag_N']))
+    return t[best_i]
+
+
 def detect_phase_split(t, F, lo_frac=0.35, hi_frac=0.65, win_s=1.0):
     """右(HaR)と左(HaL)の境目の時刻を推定して返す。
 
@@ -1251,18 +1307,19 @@ def side_summary_gui(d, split, right_first=True):
     return '\n'.join(rows)
 
 
-def sides_overlay_text(d):
-    """d から境界と左右を自動判定し、GUI用のASCIIサマリ文字列を返す（不可なら None）。"""
-    t, F = d['t_s'], d['Fmag_N']
-    if len(t) < 20:
+def sides_overlay_text(d, split=None):
+    """左右のGUI用ASCIIサマリ文字列を返す（不可なら None）。
+
+    split は差引前の生波形で検出した境界を渡す（差引後は反転の重力段差が消えて検出が不安定）。
+    省略時は d から自動検出。どちらが右かは SIDE_ORDER で決める。
+    """
+    if len(d['t_s']) < 20:
         return None
-    split = detect_phase_split(t, list(F))
+    if split is None:
+        split = detect_flip_split(d)
     if split is None:
         return None
-    fr = [F[i] for i in range(len(t)) if t[i] < split]
-    fl = [F[i] for i in range(len(t)) if t[i] >= split]
-    right_first = _median(fr) >= _median(fl)
-    return side_summary_gui(d, split, right_first)
+    return side_summary_gui(d, split, SIDE_ORDER == 'RL')
 
 
 def auto_zero(d, active_thr=0.5, split=None, ref_frac=0.15):
@@ -1281,7 +1338,7 @@ def auto_zero(d, active_thr=0.5, split=None, ref_frac=0.15):
     n = len(t)
     comps = ('fx_N', 'fy_N', 'fz_N', 'mx_Nm', 'my_Nm', 'mz_Nm')
     if split is None:
-        split = detect_phase_split(t, list(F))
+        split = detect_flip_split(d)
     segs = detect_segments(t, F, active_thr)
     if not segs:
         return d, split
@@ -1289,7 +1346,7 @@ def auto_zero(d, active_thr=0.5, split=None, ref_frac=0.15):
     sideR, sideL = [], []
     for a, b in segs:
         mid = 0.5 * (t[a] + t[b])
-        is_r = (split is None) or (mid < split)
+        is_r = (split is None) or ((mid < split) == (SIDE_ORDER == 'RL'))
         for i in range(a, b + 1):
             active[i] = True
             (sideR if is_r else sideL).append(i)
@@ -1309,7 +1366,7 @@ def auto_zero(d, active_thr=0.5, split=None, ref_frac=0.15):
             d['Fmag_N'][i] = 0.0
             d['Mmag_Nm'][i] = 0.0
             continue
-        g = gR if ((split is None) or t[i] < split) else gL
+        g = gR if ((split is None) or ((t[i] < split) == (SIDE_ORDER == 'RL'))) else gL
         if g:
             for k in comps:
                 d[k][i] -= g[k]
@@ -1370,7 +1427,15 @@ def main():
                     help='力とモーメントを別々のPNG(<名前>_force.png / _moment.png)にも保存')
     ap.add_argument('--raw', action='store_true',
                     help='空運転(air.csv)による自動補正を無効化して生データを表示')
+    ap.add_argument('--order', choices=('RL', 'LR'), default=None,
+                    help='研磨の順番。RL=右(HaR)→左(HaL)（既定, kenma）/ LR=左→右。'
+                         '左右ラベルとサイド別差引の対応づけに使う')
+    ap.add_argument('--air-order', choices=('RL', 'LR'), default=None,
+                    help='空運転(air.csv)の順番（省略時は --order と同じ）。研磨と空運転で順番を変えたとき用')
     args = ap.parse_args()
+    if args.order:
+        global SIDE_ORDER
+        SIDE_ORDER = args.order
 
     here = os.path.dirname(os.path.abspath(__file__))
     # 版の表示（端末の先頭）。この .py 自体の更新日時も出すので、git pull で
@@ -1431,17 +1496,12 @@ def main():
         print('データ切り詰め --trim %s〜%s s : %d→%d 点（%.1f〜%.1f s を採用）'
               % (args.trim[0], args.trim[1], before, n, d['t_s'][0], d['t_s'][-1]))
 
-    # 左右の境界は「差引前の生波形」で検出（HaR≈高 / HaL≈低 のコントラストが強く確実）
+    # 左右の境界は「差引前の生波形」で検出（反転区間の重力段差でコントラストが強く確実）。
+    # どちらが右かは研磨の順番（--order / SIDE_ORDER）で決める。
     split_t = None
-    right_first = True
+    right_first = (SIDE_ORDER == 'RL')
     if args.sides:
-        split_t = args.split if args.split is not None else \
-            detect_phase_split(d['t_s'], list(d['Fmag_N']))
-        if split_t is not None:
-            # 生の重力レベルが高いブロック=右(HaR)。順番を左先に変えても正しくラベルするため。
-            fr = [d['Fmag_N'][i] for i in range(len(d['t_s'])) if d['t_s'][i] < split_t]
-            fl = [d['Fmag_N'][i] for i in range(len(d['t_s'])) if d['t_s'][i] >= split_t]
-            right_first = _median(fr) >= _median(fl)
+        split_t = args.split if args.split is not None else detect_flip_split(d)
 
     baseline_note = ''
     if args.baseline:
@@ -1453,7 +1513,7 @@ def main():
             print('空運転CSVにデータがありません:', args.baseline)
             return 2
         if args.baseline_persides:
-            for ln in apply_baseline_persides(d, base):
+            for ln in apply_baseline_persides(d, base, base_order=args.air_order):
                 print(ln)
         else:
             shift = args.baseline_shift
@@ -1497,7 +1557,7 @@ def main():
             print('左右の境界を自動検出できませんでした（--split 秒 で手動指定してください）。')
         else:
             if not right_first:
-                print('（研磨順が左先と判定：ラベルを左右入れ替えて表示）')
+                print('（研磨順 LR＝左先：ラベルを左右入れ替えて表示）')
             for ln in side_summary(d, split_t, right_first=right_first):
                 print(ln)
             if not args.baseline and not args.auto_zero:
@@ -1536,7 +1596,8 @@ def main():
     auto_title = '%s%s   |   max|F|=%.1fN  max|M|=%.2fN*m  (%.0fs)' % (
         os.path.basename(path), baseline_note, s['fmax'], s['mmax'], s['dur'])
     title = style['title'] if style.get('title') else auto_title
-    fig, ax1, ax2, lines, leg = make_figure(d, s, title, contact=shade_thr, style=style)
+    fig, ax1, ax2, lines, leg = make_figure(d, s, title, contact=shade_thr, style=style,
+                                            split=split_t)
 
     # ウィンドウのタイトルバーに版とファイル名を出す（画面上でのみ。保存PNGには入らない）
     try:
