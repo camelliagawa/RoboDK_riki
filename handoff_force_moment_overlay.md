@@ -188,7 +188,8 @@ DynPick ─USB─▶ PC(force_moment_overlay.py, --force-limit) ─→ 発報で
 ### `plot_force_log.py` のオプション
 - `--baseline 空運転.csv` … **空運転CSVを差し引き、重力/姿勢オフセットを除去**して表示（真の接触力を見る本命）。
   - `--baseline-align` … 記録開始タイミングのズレを**波形(歯)の相互相関で自動整列**してから差引（推奨。LSが同一で尺は同じ・開始位置だけズレるケースに最適）。
-  - `--baseline-persides` … 空運転を**右/左の姿勢ブロックに分け、サイドごとに整列**して差引。**研磨の順番(右先/左先)を変えても同じ空運転1本でOK**（順番非依存）。`plot_sides.bat` は既定でこれを使用。
+  - `--baseline-persides` … 空運転を**右/左の姿勢ブロックに分け、サイドごとに整列**して差引。左右の境界は**J6反転時の重力段差（力ベクトルの中央値の跳び）**で検出し、**反転時刻どうしを合わせて ±2s 微調整**（air の片側が平坦で相関が低いときは微調整なし）。右/左は**時間順**で決める（既定 `--order RL`＝HaR→HaL。左先なら `--order LR`、研磨と空運転で順番が違えば `--air-order`）。`plot_sides.bat` は既定でこれを使用。
+    - ⚠ 以前は「生の重力|F|が高いブロック=右」で判定していたが、**零点を取る姿勢（kenma P[1] の J6）を変えると高低が入れ替わり左右を取り違えた**（2026-09-24 に修正）。**kenma の動作や零点姿勢を変えたら air.csv も撮り直す**こと（古い air は零点姿勢が違い使えない）。
   - `--baseline-shift 秒` … 手動で開始点を合わせる（`--baseline-align` を使わない場合）。出力PNGは `*_baselined.png`。
   - ⚠ **空運転は必ず「包丁を付けたまま砥石だけ逃がして」撮ること**。包丁を外すと自重が変わり（実測で約2.3N差）、差引後に包丁重量が“見かけの接触力”として残る。
 - `--sides` … 右(HaR)/左(HaL)を自動で分けて**各サイドの|F|統計（平均/中央/p90/最大）と左右比**を表示。`--baseline` と併用で真の左右接触力を比較。
@@ -314,7 +315,7 @@ DynPick ─USB─▶ PC(force_moment_overlay.py, --force-limit) ─→ 発報で
 ## 10. このセッション(2026-07-16)で実装した主な追加
 
 - 記録: `--rate`(headless既定50Hz) / `--live`(STOPボタン等で終了) / `--plot`(終了後自動グラフ) / `--no-open` / 保存後にフォルダを開く。
-- 差引: `--baseline` `--baseline-align` `--baseline-persides`(順番非依存) `--baseline-shift` / `--sides` `--split` / `--auto-zero`(空運転なし簡易) / `--auto-baseline`(air.csv自動検出, `plot_sides.bat`用)。
+- 差引: `--baseline` `--baseline-align` `--baseline-persides`(反転時刻で整列) `--order`/`--air-order` `--baseline-shift` / `--sides` `--split` / `--auto-zero`(空運転なし簡易) / `--auto-baseline`(air.csv自動検出, `plot_sides.bat`用)。
 - デザイン: `STYLE`辞書 + `plot_config.json` + 実行時オプション(`--title/--xlim/--ylim-*/--figsize/--dpi`) + **操作パネル`--panel`**（系列/要素ON-OFF・範囲・配色・線種・個別保存・タイトル変更）。
 - 出力: `--save-split`（力/モーメント個別PNG）/ 最大点のON-OFF。
 - ツール: `plot_sides.bat`（左右比較ワンクリック）/ `make_shortcuts.bat`（`record_force`/`plot_force`/`plot_sides`）/ `plot_config.example.json`。
