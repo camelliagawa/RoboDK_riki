@@ -24,7 +24,7 @@ import argparse
 
 # 実行中のコードの版。機能を変えたら日付.通番を上げる。起動時に端末・ウィンドウ
 # タイトル・操作パネルに表示され、「いま最新版で動いているか」を判別できるようにする。
-APP_VERSION = '2026-09-25.3'
+APP_VERSION = '2026-09-25.4'
 
 # 研磨の順番。kenma は HaR→HaL なので 'RL'（前半=右）。左先に変えたら 'LR'（--order でも指定可）。
 # 以前は「生の重力|F|が高いブロック=右」で判定していたが、零点を取る姿勢(kenma P[1])で
@@ -746,7 +746,7 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
             _do()   # タイマ非対応バックエンドでは即実行
 
     # =====================================================================
-    #  2) View range / Trim
+    #  2) View range（X = データのカット / F・M = 軸範囲）
     # =====================================================================
     card(0.516, 0.690)
     head(L + 0.006, 0.678, 'View range')
@@ -760,7 +760,7 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
         fig.canvas.draw_idle()
     b_auto.on_clicked(on_auto); keep.append(b_auto)
 
-    note(L + 0.006, 0.658, 'wheel on a value = +/- step (Shift = x0.1)  ·  type + Enter  ·  auto')
+    note(L + 0.006, 0.658, 'X = cut data (axis fixed) · F/M = axis range · wheel = +/-step (Shift x0.1)')
     note(0.757, 0.643, 'min', ha='center'); note(0.857, 0.643, 'max', ha='center')
 
     def _autoscale_axis(ax_target, axis):
@@ -821,7 +821,6 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
                                     lambda _ax: _show_lim(row))
         range_rows.append(row)
         _show_lim(row)
-    make_range_box(0.618, 'X [s]', ax1, 'x', 1.0, '%.1f')
     make_range_box(0.592, 'F [N]', ax1, 'y', 1.0, '%.1f')
     make_range_box(0.566, 'M [Nm]', ax2, 'y', 0.1, '%.2f')
 
@@ -856,14 +855,12 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
             fig.canvas.mpl_disconnect(self.cid)
     keep.append(_Conn(fig.canvas.mpl_connect('scroll_event', on_range_scroll)))
 
-    # --- Trim: delete the "non-grinding" peaks (retract at the end / entry at
-    #   the start) from the data itself. Unlike X[s] zoom (view only, Auto
-    #   restores), Trim removes the points from the lines, so Auto range does
-    #   not bring them back. The axis range stays fixed while trimming; the
-    #   mouse wheel over a Trim box steps it by 1 s (Shift = 0.1 s). Enter a number in min and/or max; leave a box empty
-    #   for "no limit"; clear both + Enter to restore. The terminal L/R summary
-    #   uses the startup values, so to update the numbers too, rerun from the
-    #   terminal, e.g.  plot_sides.bat --trim 0 254
+    # --- X row = cut data: points outside [min, max] are removed from the
+    #   lines, while the axis range stays fixed (only the waveform disappears).
+    #   Wheel over a box steps it by 1 s (Shift = 0.1 s); number + Enter also
+    #   works; 'auto' restores all data. The title / terminal L/R summary use the
+    #   startup values; to update those numbers too, rerun e.g.
+    #   plot_sides.bat --trim 0 254
     _orig_xy = {}   # key -> (xdata, ydata): stash originals once
 
     def _num(s):
@@ -899,7 +896,7 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
         return (min(ts), max(ts)) if ts else (0.0, 0.0)
 
     def trim_scroll(ev):
-        # Trim 欄の上でホイール：1 s ずつ（Shift で 0.1 s）。空欄ならデータの端から始める
+        # X(カット)欄の上でホイール：1 s ずつ（Shift で 0.1 s）。空欄ならデータの端から始める
         step = 0.1 if 'shift' in (ev.key or '').lower() else 1.0
         n = ev.step if ev.step else (1 if ev.button == 'up' else -1)
         t0, t1 = _data_trange()
@@ -912,16 +909,28 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
         new_lo, new_hi = (v, hi) if is_min else (lo, v)
         if (new_lo if new_lo is not None else t0) >= (new_hi if new_hi is not None else t1):
             return
-        (tb_trim_min if is_min else tb_trim_max).set_val('%g' % v)   # -> apply_trim
+        (tb_trim_min if is_min else tb_trim_max).set_val('%.1f' % v)   # -> apply_trim
 
-    note(L + 0.006, 0.544, 'Trim [s]  (wheel)')
-    tb_trim_min = TextBox(fig.add_axes([0.760, 0.536, 0.075, 0.022]), 'min',
-                          initial='')
-    tb_trim_max = TextBox(fig.add_axes([0.900, 0.536, 0.075, 0.022]), 'max',
-                          initial='')
+    # X 行 = データのカット（軸は固定）。欄には今の表示データの始め/終わりの時刻が出る。
+    #   ホイールで 1 s ずつ（Shift で 0.1 s）、または数値 + Enter。auto で全データに戻す。
+    def _full_texts():
+        t0, t1 = _data_trange()
+        return '%.1f' % (math.floor(t0 * 10) / 10.0), '%.1f' % (math.ceil(t1 * 10) / 10.0)
+    y_cut = 0.618
+    tb_trim_min = TextBox(fig.add_axes([0.712, y_cut, 0.090, 0.022]), 'X [s]',
+                          initial=_full_texts()[0])
+    tb_trim_max = TextBox(fig.add_axes([0.812, y_cut, 0.090, 0.022]), '',
+                          initial=_full_texts()[1])
     for _tb in (tb_trim_min, tb_trim_max):
-        _tb.label.set_fontsize(9.0)
         _tb.on_submit(apply_trim); keep.append(_tb)
+
+    def reset_cut(_e=None):
+        lo, hi = _full_texts()
+        tb_trim_min.set_val(lo); tb_trim_max.set_val(hi)
+    b_cut = Button(fig.add_axes([0.910, y_cut, 0.070, 0.022]), 'auto',
+                   color=BTN_C, hovercolor=BTN_HOVER)
+    b_cut.label.set_fontsize(8.5)
+    b_cut.on_clicked(reset_cut); keep.append(b_cut)
 
     # =====================================================================
     #  3) Colors（配色テーマ）
