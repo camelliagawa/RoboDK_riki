@@ -23,7 +23,7 @@ import argparse
 
 # 実行中のコードの版。機能を変えたら日付.通番を上げる。起動時に端末・ウィンドウ
 # タイトル・操作パネルに表示され、「いま最新版で動いているか」を判別できるようにする。
-APP_VERSION = '2026-09-24.1'
+APP_VERSION = '2026-09-25.1'
 
 # 研磨の順番。kenma は HaR→HaL なので 'RL'（前半=右）。左先に変えたら 'LR'（--order でも指定可）。
 # 以前は「生の重力|F|が高いブロック=右」で判定していたが、零点を取る姿勢(kenma P[1])で
@@ -1104,6 +1104,77 @@ def _install_qt_dnd(fig, on_path):
     return True
 
 
+def enable_wheel_zoom(fig, factor=1.2, margin_px=70):
+    """マウスホイールで縦軸・横軸を拡大縮小する（カーソル位置を中心に）。
+
+    - グラフ内          : 横軸・縦軸の両方
+    - グラフ内 + Shift  : 横軸だけ
+    - グラフ内 + Ctrl   : 縦軸だけ
+    - 横軸の目盛り付近  : 横軸だけ（力/モーメントは横軸共有なので両方動く）
+    - 縦軸の目盛り付近  : その段の縦軸だけ
+    ホイール上で拡大、下で縮小。元に戻すのはツールバーの Home か View range の Auto all。
+    対象の軸は fig._fml から毎回引くので、CSV ドロップで描き直しても接続し直し不要。
+    """
+    if getattr(fig, '_wheel_cid', None) is not None:
+        return
+
+    def _target(ev):
+        """(ax, zoom_x, zoom_y) を返す。対象外なら None。"""
+        fml = getattr(fig, '_fml', None)
+        if not fml:
+            return None
+        axes = (fml['ax1'], fml['ax2'])
+        key = (ev.key or '').lower()
+        if ev.inaxes in axes:
+            if 'shift' in key:
+                return ev.inaxes, True, False
+            if 'control' in key or 'ctrl' in key:
+                return ev.inaxes, False, True
+            return ev.inaxes, True, True
+        if ev.inaxes is not None:      # 操作パネルのウィジェット上などは無視
+            return None
+        for ax in axes:
+            bb = ax.bbox
+            if bb.y0 <= ev.y <= bb.y1 and bb.x0 - margin_px <= ev.x < bb.x0:
+                return ax, False, True
+            if bb.x0 <= ev.x <= bb.x1 and bb.y0 - margin_px <= ev.y < bb.y0:
+                return ax, True, False
+        return None
+
+    def _zoom(lo, hi, c, scale):
+        return c - (c - lo) * scale, c + (hi - c) * scale
+
+    def on_scroll(ev):
+        tgt = _target(ev)
+        if tgt is None:
+            return
+        ax, zx, zy = tgt
+        step = ev.step if ev.step else (1 if ev.button == 'up' else -1)
+        scale = factor ** (-step)          # 上=拡大(<1)、下=縮小(>1)
+        # 初回操作の前に今の表示をツールバー履歴に積む（Home で戻れるように）
+        tb = getattr(fig.canvas, 'toolbar', None)
+        try:
+            if tb is not None and tb._nav_stack() is None:
+                tb.push_current()
+        except Exception:
+            pass
+        # カーソル位置をデータ座標に（軸外では軸の範囲内に丸める）
+        cx, cy = ax.transData.inverted().transform((ev.x, ev.y))
+        if zx:
+            x0, x1 = ax.get_xlim()
+            cx = min(max(cx, min(x0, x1)), max(x0, x1))
+            ax.set_xlim(*_zoom(x0, x1, cx, scale))
+        if zy:
+            y0, y1 = ax.get_ylim()
+            cy = min(max(cy, min(y0, y1)), max(y0, y1))
+            ax.set_ylim(*_zoom(y0, y1, cy, scale))
+        fig.canvas.draw_idle()
+
+    fig._wheel_cid = fig.canvas.mpl_connect('scroll_event', on_scroll)
+    print('ヒント: マウスホイールで拡大縮小（グラフ内=縦横 / Shift=横だけ / Ctrl=縦だけ / '
+          '軸の目盛り上=その軸だけ）。戻すのは Home か Auto all。')
+
+
 def _shade_contact(ax, t, fmag, thr, color='#F0C000', alpha=0.12):
     """|F|>=thr の連続区間を軽く塗る。塗ったパッチのリストを返す（表示ON/OFF用）。"""
     patches = []
@@ -1643,6 +1714,7 @@ def main():
             except Exception as e:
                 _show_drop_error(fig, str(e))
         enable_drag_and_drop(fig, _on_drop)
+        enable_wheel_zoom(fig)
 
         plt.show()
     return 0
