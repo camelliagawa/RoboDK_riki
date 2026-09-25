@@ -12,6 +12,7 @@ force_log_*.csv から 力/モーメントの時系列グラフを生成する�
 依存: matplotlib（pip install matplotlib）。numpy 等は不要。
 """
 
+import math
 import os
 import re
 import sys
@@ -23,7 +24,7 @@ import argparse
 
 # 実行中のコードの版。機能を変えたら日付.通番を上げる。起動時に端末・ウィンドウ
 # タイトル・操作パネルに表示され、「いま最新版で動いているか」を判別できるようにする。
-APP_VERSION = '2026-09-25.1'
+APP_VERSION = '2026-09-25.2'
 
 # 研磨の順番。kenma は HaR→HaL なので 'RL'（前半=右）。左先に変えたら 'LR'（--order でも指定可）。
 # 以前は「生の重力|F|が高いブロック=右」で判定していたが、零点を取る姿勢(kenma P[1])で
@@ -759,36 +760,98 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
         fig.canvas.draw_idle()
     b_auto.on_clicked(on_auto); keep.append(b_auto)
 
-    note(L + 0.006, 0.658, 'type "min  max" + Enter to set  ·  auto = autoscale that axis')
+    note(L + 0.006, 0.658, 'wheel on a value = +/- step (Shift = x0.1)  ·  type + Enter  ·  auto')
+    note(0.757, 0.643, 'min', ha='center'); note(0.857, 0.643, 'max', ha='center')
 
     def _autoscale_axis(ax_target, axis):
         ax_target.relim()
         ax_target.autoscale(enable=True, axis=axis)
         fig.canvas.draw_idle()
 
-    def make_range_box(y, label, ax_target, axis):
-        # 範囲入力欄（min max）＋その軸だけのオートスケール "auto" ボタンを1行に置く
-        tb = TextBox(fig.add_axes([0.712, y, 0.190, 0.022]), label, initial='')
+    range_rows = []   # (tb_min, tb_max, ax_target, axis, step, fmt)
 
-        def submit(text):
-            text = text.strip()
-            try:
-                if text == '':
-                    _autoscale_axis(ax_target, axis)
-                else:
-                    a, b = text.replace(',', ' ').split()
-                    (ax_target.set_xlim if axis == 'x' else ax_target.set_ylim)(float(a), float(b))
-                    fig.canvas.draw_idle()
-            except Exception:
-                pass
-        tb.on_submit(submit); keep.append(tb)
+    def _get_lim(ax_target, axis):
+        return ax_target.get_xlim() if axis == 'x' else ax_target.get_ylim()
+
+    def _set_lim(ax_target, axis, lo, hi):
+        (ax_target.set_xlim if axis == 'x' else ax_target.set_ylim)(lo, hi)
+        fig.canvas.draw_idle()
+
+    def _show_lim(row):
+        """今の表示範囲を min/max 欄に書く（入力中の欄は触らない・submit は発火させない）。"""
+        tb_lo, tb_hi, ax_target, axis, _step, fmt = row
+        lo, hi = _get_lim(ax_target, axis)
+        for tb, v in ((tb_lo, lo), (tb_hi, hi)):
+            if not tb.capturekeystrokes:
+                tb.text_disp.set_text(fmt % v)
+
+    def make_range_box(y, label, ax_target, axis, step, fmt):
+        # min 欄・max 欄＋その軸だけのオートスケール "auto" ボタンを1行に置く。
+        # 欄には現在の表示範囲が出ていて、マウスを乗せてホイールで step ずつ増減できる。
+        tb_lo = TextBox(fig.add_axes([0.712, y, 0.090, 0.022]), label, initial='')
+        tb_hi = TextBox(fig.add_axes([0.812, y, 0.090, 0.022]), '', initial='')
+        row = (tb_lo, tb_hi, ax_target, axis, step, fmt)
+
+        def submit(which):
+            def f(text):
+                text = text.strip()
+                try:
+                    if text == '':
+                        _autoscale_axis(ax_target, axis)
+                        return
+                    lo, hi = _get_lim(ax_target, axis)
+                    v = float(text.replace(',', ''))
+                    if which == 0:
+                        lo = v
+                    else:
+                        hi = v
+                    if lo < hi:
+                        _set_lim(ax_target, axis, lo, hi)
+                except Exception:
+                    pass
+                _show_lim(row)
+            return f
+        tb_lo.on_submit(submit(0)); tb_hi.on_submit(submit(1))
+        keep.extend([tb_lo, tb_hi])
         b = Button(fig.add_axes([0.910, y, 0.070, 0.022]), 'auto',
                    color=BTN_C, hovercolor=BTN_HOVER)
         b.label.set_fontsize(8.5)
         b.on_clicked(lambda _e: _autoscale_axis(ax_target, axis)); keep.append(b)
-    make_range_box(0.626, 'X [s]', ax1, 'x')
-    make_range_box(0.600, 'F [N]', ax1, 'y')
-    make_range_box(0.574, 'M [Nm]', ax2, 'y')
+        ax_target.callbacks.connect('xlim_changed' if axis == 'x' else 'ylim_changed',
+                                    lambda _ax: _show_lim(row))
+        range_rows.append(row)
+        _show_lim(row)
+    make_range_box(0.618, 'X [s]', ax1, 'x', 1.0, '%.1f')
+    make_range_box(0.592, 'F [N]', ax1, 'y', 1.0, '%.1f')
+    make_range_box(0.566, 'M [Nm]', ax2, 'y', 0.1, '%.2f')
+
+    def on_range_scroll(ev):
+        # min/max 欄の上でホイール：上で +step、下で -step（Shift で 1/10 刻み）。
+        # 刻みの倍数にそろえる（-13.36 -> -13 -> -12 ...）。min>=max になる操作は無視。
+        for row in range_rows:
+            tb_lo, tb_hi, ax_target, axis, step, _fmt = row
+            if ev.inaxes not in (tb_lo.ax, tb_hi.ax):
+                continue
+            if 'shift' in (ev.key or '').lower():
+                step = step / 10.0
+            n = ev.step if ev.step else (1 if ev.button == 'up' else -1)
+            lo, hi = _get_lim(ax_target, axis)
+            i = 0 if ev.inaxes is tb_lo.ax else 1
+            v = (lo, hi)[i]
+            k = v / step
+            k = (math.floor(k + 1e-9) + n) if n > 0 else (math.ceil(k - 1e-9) + n)
+            v = round(k * step, 6)
+            lo, hi = (v, hi) if i == 0 else (lo, v)
+            if lo < hi:
+                _set_lim(ax_target, axis, lo, hi)
+            return
+
+    class _Conn:   # render_csv の disconnect_events() で外せるように包む
+        def __init__(self, cid):
+            self.cid = cid
+        def disconnect_events(self):
+            fig.canvas.mpl_disconnect(self.cid)
+    keep.append(_Conn(fig.canvas.mpl_connect('scroll_event', on_range_scroll)))
 
     # --- Trim: delete the "non-grinding" peaks (retract at the end / entry at
     #   the start) from the data itself. Unlike X[s] zoom (view only, Auto
