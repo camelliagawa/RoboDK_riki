@@ -40,14 +40,20 @@ def panel_a(ax):
     eZ = np.array([0.88, 0.47])          # 刃渡り方向
     P = lambda x, y, z: x * eX + y * eY + z * eZ
 
-    # 刃（Z: -4.6..2.4 = 切っ先..アゴ、Y: -0.9..0.9 = 刃先..峰）
-    blade = [P(0, -0.9, -4.6), P(0, -0.9, 2.4), P(0, 0.9, 2.4), P(0, 0.9, -3.8)]
+    # 刃（Z: -4.6..2.4 = 切っ先..アゴ、Y: +0.9 = 刃先（エッジ）、-0.9 = 峰）
+    # 峰は直線、刃先は切っ先に向かって峰側へ反り上がる
+    th = np.linspace(0, np.pi / 2, 12)
+    curve = [P(0, -0.9 + 1.8 * np.cos(t), -3.4 - 1.2 * np.sin(t)) for t in th]
+    edge = [P(0, 0.9, 2.4)] + curve
+    blade = [P(0, -0.9, 2.4)] + edge
     ax.add_patch(Polygon(blade, closed=True, fc=BLADE, ec='#555', lw=1.5))
-    ax.plot(*np.array([P(0, -0.9, -4.6), P(0, -0.9, 2.4)]).T, color='#222', lw=2.5)
-    m = P(0, -1.25, -3.0)
-    ax.text(*m, '刃先（エッジ）', rotation=np.degrees(np.arctan2(eZ[1], eZ[0])),
+    ax.plot(*np.array(edge).T, color='#222', lw=2.5)
+    rot = np.degrees(np.arctan2(eZ[1], eZ[0]))
+    ax.text(*P(0, 1.35, -2.6), '刃先（エッジ）', rotation=rot,
             ha='center', va='center', fontsize=10)
-    ax.text(*P(0, -0.2, -5.2), '切っ先', ha='center', fontsize=9, color='#555')
+    ax.text(*P(0, -1.3, -2.6), '峰', rotation=rot,
+            ha='center', va='center', fontsize=10, color='#555')
+    ax.text(*P(0, -1.2, -5.0), '切っ先', ha='center', fontsize=9, color='#555')
 
     # 柄・グリッパ（アゴ側）とセンサ円筒（J6軸 = センサFz方向 = ツール-Y）
     handle = [P(0, -0.6, 2.4), P(0, -0.6, 3.8), P(0, 0.6, 3.8), P(0, 0.6, 2.4)]
@@ -117,8 +123,12 @@ def section(ax, title, x_up, z_away, label_z, root, tip):
     ax.add_patch(Circle((0, -2.0), 2.1, fc=STONE, ec='#857a66', lw=1.5))
     ax.add_patch(Rectangle((-3.6, -4.4), 7.8, 0.2, fc='white', ec='none', zorder=3))
     ax.text(0, -2.5, '砥石', ha='center', fontsize=11, color='#555')
-    ax.add_patch(Rectangle((-1.95, 0.1), 3.9, 0.16, fc=BLADE, ec='#555', lw=1.2, zorder=4))
-    ax.text(-2.05, 0.18, '刃（断面・模式）', ha='right', va='center', fontsize=9, color='#444')
+    # 刃の断面：峰（-Y, 紙面左）が厚く、刃先（+Y, 紙面右）が薄い両刃のくさび形。J6反転でも+Y側のまま
+    ax.add_patch(Polygon([(-1.95, 0.1), (1.95, 0.22), (1.95, 0.24), (-1.95, 0.36)], closed=True,
+                         fc=BLADE, ec='#555', lw=1.2, zorder=4))
+    ax.text(-1.9, 0.5, '峰', fontsize=9, color='#555', ha='center')
+    ax.text(1.95, 0.38, '刃先（エッジ）', fontsize=9, color='#222', ha='center', va='bottom')
+    ax.text(-2.05, 0.2, '刃（断面・模式）', ha='right', va='center', fontsize=9, color='#444')
     # UF 方向
     ax.annotate('', xy=(2.6, -2.0), xytext=(2.6, -3.3),
                 arrowprops=dict(arrowstyle='->', color='#777'))
@@ -156,7 +166,7 @@ def main():
     fig.text(0.99, 0.975, '修正版  %s' % REV_DATE, fontsize=14, fontweight='bold',
              color='#b03a2e', ha='right', va='top',
              bbox=dict(boxstyle='round,pad=0.35', fc='#fdecea', ec='#b03a2e'))
-    fig.text(0.99, 0.925, '修正点：J6軸はツール+Z（センサFx）ではなく、ツール+Y（センサFz・円筒軸）',
+    fig.text(0.99, 0.925, '修正点：J6軸はツール+Y（センサFz・円筒軸）／刃先（エッジ）はツール+Y側',
              fontsize=10.5, color='#b03a2e', ha='right', va='top')
 
     fig.text(0.02, 0.085,
