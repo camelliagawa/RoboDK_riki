@@ -24,7 +24,7 @@ import argparse
 
 # 実行中のコードの版。機能を変えたら日付.通番を上げる。起動時に端末・ウィンドウ
 # タイトル・操作パネルに表示され、「いま最新版で動いているか」を判別できるようにする。
-APP_VERSION = '2026-09-25.5'
+APP_VERSION = '2026-10-23.1'
 
 # 研磨の順番。kenma は HaR→HaL なので 'RL'（前半=右）。左先に変えたら 'LR'（--order でも指定可）。
 # 以前は「生の重力|F|が高いブロック=右」で判定していたが、零点を取る姿勢(kenma P[1])で
@@ -332,12 +332,12 @@ def apply_baseline_persides(d, base, order=None, base_order=None):
     base_order = base_order or order
     comps = ('fx_N', 'fy_N', 'fz_N', 'mx_Nm', 'my_Nm', 'mz_Nm', 'Fmag_N', 'Mmag_Nm')
     tg, ta = d['t_s'], base['t_s']
-    sg = detect_flip_split(d)
-    sa = detect_flip_split(base)
+    # 研磨側の反転は空運転の重力段差を手本に探す（研磨の接触段差との取り違え防止）
+    sg, sa, notes = detect_flip_split_air(d, base)
     if sg is None or sa is None:
         s, c = estimate_baseline_shift(d, base)
         apply_baseline(d, base, shift=s)
-        return ['サイド別整列に失敗→全体整列で差引 (shift=%.2fs, corr=%.3f)' % (s, c)]
+        return notes + ['サイド別整列に失敗→全体整列で差引 (shift=%.2fs, corr=%.3f)' % (s, c)]
 
     def idx_at(t, val):
         for i in range(len(t)):
@@ -355,8 +355,8 @@ def apply_baseline_persides(d, base, order=None, base_order=None):
 
     gl, al = label(gblocks, order), label(ablocks, base_order)
     same = (order == base_order)
-    out = ['サイド別に整列して差引（研磨順 %s / 空運転順 %s, 反転 研磨%.1fs / 空運転%.1fs）:'
-           % (order, base_order, sg, sa)]
+    out = notes + ['サイド別に整列して差引（研磨順 %s / 空運転順 %s, 反転 研磨%.1fs / 空運転%.1fs）:'
+                   % (order, base_order, sg, sa)]
     for side, jp in (('R', '右 HaR'), ('L', '左 HaL')):
         ga, gb = gl[side]
         aa, ab = al[side]
@@ -1097,8 +1097,13 @@ def render_csv(fig, path, style, contact, baseline_on=False, with_panel=True):
                          os.path.join(here, 'samples')])
     note, applied = '', False
     split = detect_flip_split(d)     # 差引前の生波形で左右の境界を検出
-    if baseline_on and air:
-        base = load_log(air)
+    base = load_log(air) if air else None
+    if base and base['t_s']:
+        # 空運転があれば、その重力段差を手本に反転を探す（接触段差と取り違えない）
+        sg, _, _ = detect_flip_split_air(d, base)
+        if sg is not None:
+            split = sg
+    if baseline_on and base:
         if base['t_s']:
             for ln in apply_baseline_persides(d, base):
                 print(ln)
@@ -1324,6 +1329,65 @@ def detect_flip_split(d, lo_frac=0.3, hi_frac=0.7, win_s=10.0, step_s=0.1, min_s
     if best_i is None or best_v ** 0.5 < min_step:
         return detect_phase_split(t, list(d['Fmag_N']))
     return t[best_i]
+
+
+def _flip_step(d, i, w_before, w_after):
+    """i の直前 w_before 点と直後 w_after 点の (fx,fy,fz) 中央値の差ベクトル。"""
+    def med(col, a, b):
+        v = sorted(col[a:b])
+        return v[len(v) // 2]
+    n = len(d['t_s'])
+    a, b = max(0, i - w_before), min(n, i + w_after)
+    return [med(d[k], i, b) - med(d[k], a, i) for k in ('fx_N', 'fy_N', 'fz_N')]
+
+
+def detect_flip_split_air(d, base, win_s=10.0, step_s=0.1, min_side_s=1.0, tol=0.5):
+    """空運転(base)の J6反転の重力段差ベクトルを手本に、研磨(d)の反転時刻を探す。
+
+    重力は姿勢だけで決まるので、研磨でも反転の瞬間には空運転と同じ段差ベクトルが出る。
+    研磨の接触力による段差は向き・大きさが違うので取り違えにくい。detect_flip_split と違い
+    記録の端まで探す（窓は端で縮める）ので、片面の途中で記録が止まったログでも反転を拾える。
+    空運転は接触が無いので従来の detect_flip_split で確実に取れる。
+    戻り値: (研磨の反転時刻 or None, 空運転の反転時刻 or None, 診断文字列リスト)
+    """
+    sa = detect_flip_split(base)
+    t = d['t_s']
+    n = len(t)
+    if sa is None or n < 10:
+        return None, sa, []
+    ta = base['t_s']
+    rate_a = len(ta) / ((ta[-1] - ta[0]) or 1.0)
+    ia = next((i for i, x in enumerate(ta) if x >= sa), len(ta) - 1)
+    wa = max(1, int(rate_a * win_s))
+    ref = _flip_step(base, ia, wa, wa)
+    ref_mag = sum(x * x for x in ref) ** 0.5
+    if ref_mag < 2.0:
+        return None, sa, ['空運転の反転段差が小さすぎます(%.1fN)→空運転による反転検出は省略' % ref_mag]
+
+    rate = n / ((t[-1] - t[0]) or 1.0)
+    w = max(1, int(rate * win_s))
+    w_min = max(1, int(rate * min_side_s))
+    stride = max(1, int(rate * step_s))
+    best_i, best_v = None, float('inf')
+    for i in range(w_min, n - w_min, stride):
+        step = _flip_step(d, i, min(w, i), min(w, n - i))
+        v = sum((s - r) ** 2 for s, r in zip(step, ref)) ** 0.5
+        if v < best_v:
+            best_v, best_i = v, i
+    if best_i is None or best_v > tol * ref_mag:
+        return None, sa, ['空運転と同じ反転段差(|ΔF|=%.1fN)が研磨ログに見つかりません（最小残差%.1fN）'
+                          % (ref_mag, best_v)]
+    sg = t[best_i]
+    notes = []
+    # 反転後（または前）の記録が空運転より極端に短い＝記録が途中で止まった可能性
+    dur_g = (sg - t[0], t[-1] - sg)
+    dur_a = (sa - ta[0], ta[-1] - sa)
+    for k, name in ((0, '前半'), (1, '後半')):
+        if dur_a[k] > 0 and dur_g[k] < 0.5 * dur_a[k]:
+            notes.append('⚠ 研磨ログの%sが %.1fs しかありません（空運転は %.1fs）。'
+                         '記録が途中で止まった／始まりが遅れた可能性があります。'
+                         % (name, dur_g[k], dur_a[k]))
+    return sg, sa, notes
 
 
 def detect_phase_split(t, F, lo_frac=0.35, hi_frac=0.65, win_s=1.0):
@@ -1606,6 +1670,11 @@ def main():
     right_first = (SIDE_ORDER == 'RL')
     if args.sides:
         split_t = args.split if args.split is not None else detect_flip_split(d)
+        if args.split is None and args.baseline and os.path.isfile(args.baseline):
+            # 空運転があれば、その重力段差を手本に反転を探す（接触段差と取り違えない）
+            sg, _, _ = detect_flip_split_air(d, load_log(args.baseline))
+            if sg is not None:
+                split_t = sg
 
     baseline_note = ''
     if args.baseline:
