@@ -24,7 +24,7 @@ import argparse
 
 # 実行中のコードの版。機能を変えたら日付.通番を上げる。起動時に端末・ウィンドウ
 # タイトル・操作パネルに表示され、「いま最新版で動いているか」を判別できるようにする。
-APP_VERSION = '2026-10-23.1'
+APP_VERSION = '2026-10-28.1'
 
 # 研磨の順番。kenma は HaR→HaL なので 'RL'（前半=右）。左先に変えたら 'LR'（--order でも指定可）。
 # 以前は「生の重力|F|が高いブロック=右」で判定していたが、零点を取る姿勢(kenma P[1])で
@@ -641,8 +641,9 @@ def add_control_panel(fig, ax1, ax2, lines, leg, save_base=None, save_dpi=120):
     head(L + 0.006, 0.962, 'Series')
     head(0.826, 0.962, 'Elements')
 
-    order = [('fx', 'Fx'), ('fy', 'Fy'), ('fz', 'Fz'), ('fmag', '|F|'),
-             ('mx', 'Mx'), ('my', 'My'), ('mz', 'Mz'), ('mmag', '|M|')]
+    # 表示名は STYLE のラベルに合わせる（world_frame.py が Fn/Ft/Fa 等に差し替えて使う）
+    order = [(k, S.get('label_' + k, k)) for k in
+             ('fx', 'fy', 'fz', 'fmag', 'mx', 'my', 'mz', 'mmag')]
     slabels = [lb for _, lb in order]
     ax_s = fig.add_axes([0.664, 0.732, 0.150, 0.220]); ax_s.set_axis_off()
     scolors = [lines[k].get_color() for k, _ in order]

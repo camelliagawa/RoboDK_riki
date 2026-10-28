@@ -24,6 +24,9 @@
   ※ センサ取付向きの推定に ±10° 程度の不確かさがある（2026-10-28 校正、handoff §0.3）。
     Fn と |F| は信頼できるが、Ft（引きずり）は参考値として見ること。
 
+画面: plot_force_log.py と同じ操作パネル付き（表示ON/OFF・表示範囲・配色・線種・軸ラベル・
+      個別保存・タイトル・左右サマリ）。Shade で面の区間の塗りを切り替え。
+      Baseline 切替とドラッグ&ドロップは無し（センサ座標の通常グラフに戻ってしまうため）。
 出力: wheel_<ログ名>.png / wheel_<ログ名>.csv（world なら world_<ログ名>）
 依存: numpy, matplotlib
 """
@@ -318,16 +321,19 @@ def transform(csv_path, frame='wheel', air_path=None, ls_dir=None, log=print):
     if frame == 'wheel':
         Fw[:, 1] *= -1        # Ft：刃の動き(+Y)と逆向きを＋にする
     return {'t': t, 'F': Fw, 'M': Mw, 'fmag': fmag, 'mmag': np.linalg.norm(M, axis=1),
-            'faces': faces, 'frame': frame, 'air': air_path, 'ls_dir': ls_dir,
+            'faces': faces, 'split': g0, 'frame': frame, 'air': air_path, 'ls_dir': ls_dir,
             'kenma': kenma if os.path.isfile(kenma) else None}
 
 
 # グラフの文字は既存の plot_force_log.py に合わせて英語（日本語フォントが無いPCでも文字化けしない）
+# 並びは plot_force_log の fx/fy/fz・mx/my/mz の枠に入れる順
 LABELS = {
-    'wheel': (('Fa along blade (X)', 'Ft drag (-Y) *ref.', 'Fn push (+Z)'),
-              ('Mx (Kenma)', 'My (Kenma)', 'Mz (Kenma)'), 'wheel frame (Kenma point)'),
-    'world': (('Fx (world)', 'Fy (world)', 'Fz (world)'), ('Mx (world)', 'My (world)', 'Mz (world)'),
-              'world frame (robot base)'),
+    'wheel': {'label_fx': 'Fa blade', 'label_fy': 'Ft drag*', 'label_fz': 'Fn push',
+              'label_mx': 'Mx(K)', 'label_my': 'My(K)', 'label_mz': 'Mz(K)',
+              'name': 'wheel frame (Kenma point)'},
+    'world': {'label_fx': 'Fx(W)', 'label_fy': 'Fy(W)', 'label_fz': 'Fz(W)',
+              'label_mx': 'Mx(W)', 'label_my': 'My(W)', 'label_mz': 'Mz(W)',
+              'name': 'world frame (robot base)'},
 }
 SHORT = {'wheel': ('Fa', 'Ft', 'Fn'), 'world': ('Fx', 'Fy', 'Fz')}
 
@@ -346,48 +352,72 @@ def summary(res, log=print):
 
 def save_csv(res, path):
     names = ('fa_N', 'ft_N', 'fn_N') if res['frame'] == 'wheel' else ('fx_N', 'fy_N', 'fz_N')
+    mnames = ('mx_Nm', 'my_Nm', 'mz_Nm')
     with open(path, 'w', encoding='utf-8', newline='') as f:
-        f.write('t_s,%s,%s,%s,mx_Nm,my_Nm,mz_Nm,Fmag_N\n' % names)
+        f.write('t_s,%s,%s,%s,%s,%s,%s,Fmag_N\n' % (names + mnames))
         for i in range(len(res['t'])):
             vals = [res['t'][i], *res['F'][i], *res['M'][i], res['fmag'][i]]
             f.write(','.join('' if v != v else '%.4f' % v for v in vals) + '\n')
 
 
-def plot(res, title, png, show=True):
+def to_pfl(res):
+    """plot_force_log の列 dict 形式に詰め替える（面の区間外は NaN＝線を描かない）。"""
+    d = {'t_s': list(res['t']), 'Fmag_N': list(res['fmag']), 'Mmag_Nm': list(res['mmag'])}
+    for i, k in enumerate(('fx_N', 'fy_N', 'fz_N')):
+        d[k] = list(res['F'][:, i])
+    for i, k in enumerate(('mx_Nm', 'my_Nm', 'mz_Nm')):
+        d[k] = list(res['M'][:, i])
+    return d
+
+
+def show(res, path, png, no_show=False):
+    """plot_force_log と同じ画面（操作パネル付き）で表示する。PNG はパネルを付ける前に保存。"""
     import warnings
     warnings.filterwarnings('ignore', message='Glyph')
     import matplotlib
-    if not show:
+    if no_show:
         matplotlib.use('Agg')
+    here = os.path.dirname(os.path.abspath(pfl.__file__))
+    style = pfl.load_style(here)
+    lab = LABELS[res['frame']]
+    style.update({k: v for k, v in lab.items() if k.startswith('label_')})
+    style['show_side_summary'] = True
+    style['show_shade'] = True
+    if style.get('font_family'):
+        matplotlib.rcParams['font.family'] = style['font_family']
     import matplotlib.pyplot as plt
-    fl, ml, fname = LABELS[res['frame']]
-    t = res['t']
-    colors = ('#16A085', '#8E44AD', '#C0392B') if res['frame'] == 'wheel' else ('#D55E00', '#009E73', '#0072B2')
-    fig, ax = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
-    for i in range(3):
-        ax[0].plot(t, res['F'][:, i], color=colors[i], lw=1.0, label=fl[i])
-        ax[1].plot(t, res['M'][:, i], color=colors[i], lw=1.0, label=ml[i])
-    ax[0].plot(t, res['fmag'], color='#222222', lw=0.8, alpha=0.5, label='|F|')
-    ax[1].plot(t, res['mmag'], color='#222222', lw=0.8, alpha=0.5, label='|M|')
-    for side, (a, b, used, n) in res['faces'].items():
-        for x in ax:
-            x.axvspan(a, b, color='#F0C000' if side == 'R' else '#3498DB', alpha=0.06)
-        ax[0].text((a + b) / 2, 1.0, 'right HaR' if side == 'R' else 'left HaL', transform=ax[0].get_xaxis_transform(),
-                   ha='center', va='bottom', fontsize=9)
-    ax[0].set_ylabel('Force [N]')
-    ax[1].set_ylabel('Moment [N*m]')
-    ax[1].set_xlabel('Time [s]')
-    for x in ax:
-        x.grid(alpha=0.4)
-        x.legend(loc='upper right', fontsize=8, ncol=4)
-    fig.suptitle('%s  -  %s' % (title, fname), fontsize=11)
-    if res['frame'] == 'wheel':
-        fig.text(0.01, 0.005, 'air subtracted. Sensor mounting has ~±10 deg uncertainty: Fn and |F| are reliable, '
-                 'Ft is for reference only. Components are shown only inside each face.', fontsize=8, color='#666666')
-    fig.tight_layout(rect=(0, 0.02, 1, 0.97))
-    fig.savefig(png, dpi=120)
-    if show:
-        plt.show()
+    d = to_pfl(res)
+    s = pfl.summarize(d)
+    title = style['title'] if style.get('title') else '%s [%s]   |   max|F|=%.1fN  max|M|=%.2fN*m  (%.0fs)' % (
+        os.path.basename(path), lab['name'], s['fmax'], s['mmax'], s['dur'])
+    fig, ax1, ax2, lines, leg = pfl.make_figure(d, s, title, contact=None, style=style,
+                                                split=res.get('split'))
+    # 面の区間を塗る（パネルの Shade で ON/OFF）
+    for ax in (ax1, ax2):
+        ax._shade_patches = [ax.axvspan(a, b, color='#F0C000' if side == 'R' else '#3498DB',
+                                        alpha=0.07, zorder=0)
+                             for side, (a, b, used, n) in res['faces'].items()]
+    note = ('air subtracted. Components shown only inside each face (shaded).  ' +
+            ('* Ft: sensor mounting has ~+-10 deg uncertainty, use as reference. Fn and |F| are reliable.'
+             if res['frame'] == 'wheel' else
+             'Mounting has ~+-10 deg uncertainty: vertical (Fz) is reliable, horizontal X/Y for reference.'))
+    fig._wf_note = fig.text(0.01, 0.004, note, fontsize=7.5, color='#666666')
+    _tv = ax1.title.get_visible()
+    ax1.title.set_visible(False)
+    fig.savefig(png, dpi=style['dpi'])
+    ax1.title.set_visible(_tv)
+    if no_show:
+        return
+    # Baseline 切替とドラッグ&ドロップは付けない（センサ座標の通常グラフに戻ってしまうため）
+    fig._plotstate = dict(csv=path, style=style, contact=None, air=None,
+                          baseline_on=True, with_panel=True)
+    pfl.add_control_panel(fig, ax1, ax2, lines, leg,
+                          save_base=os.path.splitext(png)[0], save_dpi=style['dpi'])
+    try:
+        fig.canvas.manager.set_window_title('world_frame [%s]  -  %s' % (res['frame'], os.path.basename(path)))
+    except Exception:
+        pass
+    plt.show()
 
 
 def main(argv=None):
@@ -415,8 +445,8 @@ def main(argv=None):
     folder, name = os.path.split(os.path.splitext(path)[0])
     stem = os.path.join(folder, '%s_%s' % (a.frame, name))
     save_csv(res, stem + '.csv')
-    plot(res, os.path.basename(path), stem + '.png', show=not a.no_show)
     print('保存 :', stem + '.png', '/', stem + '.csv')
+    show(res, path, stem + '.png', no_show=a.no_show)
     return 0
 
 
