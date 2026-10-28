@@ -11,3 +11,6 @@ pyserial>=3.5
 
 # matplotlib : plot_force_log.py で記録CSVから時系列グラフを描画する場合に必要。
 matplotlib>=3.5
+
+# numpy : world_frame.py（砥石基準／ワールド座標への変換）で使う。matplotlib と一緒に入ることが多い。
+numpy>=1.20
