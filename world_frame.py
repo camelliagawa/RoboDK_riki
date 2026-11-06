@@ -288,9 +288,15 @@ def transform(csv_path, frame='wheel', air_path=None, ls_dir=None, log=print):
     if g0 is None:
         log('J6 反転（左面の重力段差）が見つかりません。両面を研磨し終えたログか確認してください。')
         return None
-    pin = raw[(t > g0) & (t < g1)] @ u
-    pout = raw[(t < g0) | (t > g1)] @ u
-    if len(pin) == 0 or len(pout) == 0 or np.median(pin) - np.median(pout) < 3.0:
+    # 反転の両端で、直前・直後の数秒の重力段差を見る（区間全体の中央値で比べると、
+    # 接触力の向きによっては段差が打ち消されて誤って「無い」と判定する: 2026-11-06 の砥石回転ログ）
+    pr = raw @ u
+
+    def _step(g):
+        b = pr[(t > g - 4.0) & (t < g - 0.5)]
+        a = pr[(t > g + 0.5) & (t < g + 4.0)]
+        return np.median(a) - np.median(b) if len(a) and len(b) else 0.0
+    if _step(g0) < 3.0 or -_step(g1) < 3.0:
         log('J6 反転（左面の重力段差）が見つかりません。両面を研磨し終えたログか確認してください。')
         return None
     log('J6 反転の区間: 研磨 %.1f〜%.1f s（空運転 %.1f〜%.1f s）' % (g0, g1, a0, a1))
